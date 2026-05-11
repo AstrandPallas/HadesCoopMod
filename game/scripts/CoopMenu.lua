@@ -95,6 +95,15 @@ MainMenuAPIAddGamemode("Coop", function(name)
 
     local btn = CreateGUIComponentButton(menu)
 
+    -- Diagnostic helper: prefer Hades's DebugPrint, but the Lua sandbox at
+    -- main-menu time may filter it; we keep the calls minimal and only run
+    -- those paths if DebugPrint is available, so we never crash the menu.
+    local function ProbeLog(msg)
+        if DebugPrint then
+            DebugPrint { Text = "[CoopMenu] " .. msg }
+        end
+    end
+
     -- Build the per-state message text — list each selected player's controller
     -- on its own line, plus (when 2+ are selected and more can join) a hint that
     -- pressing an already-bound device will start the game.
@@ -102,15 +111,21 @@ MainMenuAPIAddGamemode("Coop", function(name)
         local template = GetDisplayName { Text = "CoopMenu_PlayerController" }
         local lines = {}
         for i = 1, n do
-            table.insert(lines, string.gsub(template, "%$(%w+)", {
+            -- string.gsub returns (string, count) — wrap in parens so only
+            -- the string makes it into table.insert. Without this, the
+            -- replacement count is passed as table.insert's third arg and
+            -- the call errors at runtime, silently aborting SetStage.
+            local replaced = (string.gsub(template, "%$(%w+)", {
                 PlayerIndex = i,
                 Controller = TostringPlayerConfiguration(i),
             }))
+            table.insert(lines, replaced)
         end
         return table.concat(lines, "\n")
     end
 
     local function SetStage(state)
+        ProbeLog("SetStage -> " .. tostring(state) .. " (n=" .. tostring(#SelectedGuiControl) .. ")")
         CURRENT_MENU_STATE = state
         local n = #SelectedGuiControl
 
@@ -166,31 +181,40 @@ MainMenuAPIAddGamemode("Coop", function(name)
 
     btn:AddActivationHandler(function()
         local n = #SelectedGuiControl
+        ProbeLog("btn activated. state=" .. tostring(CURRENT_MENU_STATE) .. " n=" .. tostring(n))
 
         -- Error-recovery: return to the appropriate "ready" state without
         -- discarding earlier selections; user retries with a fresh press.
         if CURRENT_MENU_STATE == MENU_STATE.INVALID_STATE_SECOND_KEYBOARD
             or CURRENT_MENU_STATE == MENU_STATE.INVALID_STATE_SAME_DEVICE then
+            ProbeLog("  recovery from error state")
             SetStage(SelectedStateFor(n))
             return
         end
 
         local device = GetCurrentControl()
+        ProbeLog("  GetCurrentControl: Device=" .. tostring(device.Device) .. " ControllerId=" .. tostring(device.ControllerId))
+        ProbeLog("    UseMouse=" .. tostring(GetConfigOptionValue { Name = "UseMouse" }) ..
+                 " UseGamepadGlyphs=" .. tostring(GetConfigOptionValue { Name = "UseGamepadGlyphs" }) ..
+                 " CoopGetPlayerGamepad(1)=" .. tostring(CoopGetPlayerGamepad(1)))
 
         -- Once at the max, any press starts the game.
         if n >= MAX_COOP_PLAYERS then
+            ProbeLog("  at max, starting game")
             StartGameNow()
             return
         end
 
         -- At 2+ players, pressing an already-selected device starts the game.
         if n >= 2 and MatchesExistingDevice(device) then
+            ProbeLog("  existing device at 2+, starting game")
             StartGameNow()
             return
         end
 
         -- Otherwise we're trying to add a new player. Validate first.
         if device.Device == "Keyboard" and n >= 1 then
+            ProbeLog("  keyboard not allowed for P" .. (n + 1))
             SetStage(MENU_STATE.INVALID_STATE_SECOND_KEYBOARD)
             return
         end
@@ -198,10 +222,12 @@ MainMenuAPIAddGamemode("Coop", function(name)
         if n >= 1 and MatchesExistingDevice(device) then
             -- At the P1_SELECTED stage same-device is an error (need >= 2 to
             -- start). At 2+ the matches-existing path above already started.
+            ProbeLog("  same device as existing, error")
             SetStage(MENU_STATE.INVALID_STATE_SAME_DEVICE)
             return
         end
 
+        ProbeLog("  adding P" .. (n + 1))
         SelectedGuiControl[n + 1] = device
         SetStage(SelectedStateFor(n + 1))
     end)
