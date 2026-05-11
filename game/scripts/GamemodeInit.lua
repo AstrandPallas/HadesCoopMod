@@ -38,6 +38,7 @@ ModRequire "hooks/DamageHooks.lua"
 ModRequire "hooks/UseHooks.lua"
 ModRequire "hooks/ControlHooks.lua"
 ModRequire "hooks/WeaponHooks.lua"
+ModRequire "hooks/FountainHooks.lua"
 
 local hooksInited = false
 local function TryInstalBasicHooks()
@@ -49,8 +50,6 @@ local function TryInstalBasicHooks()
 
     -- Fixes crash on loading when the game truing add last stand to a second player
     ScreenAnchors = {}
-    -- Fixes crash when a keepsake changes player 2 health
-    EnemyHealthDisplayAnchors = {}
 
     EnemyAiHooks.InitHooks()
     SaveHooks.InitHooks()
