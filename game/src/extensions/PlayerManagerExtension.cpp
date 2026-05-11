@@ -86,13 +86,16 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
     if (index >= MAX_PLAYERS)
         return nullptr;
 
-    // Engine pre-allocates m_palyers at size 2. To allocate slot >= 2 we have
-    // to grow the vector first, using the engine's own resize (resolved via
-    // GetSymbolAddress at init) so the existing 2-slot storage and any new
-    // storage share the same allocator (forge).
-    auto *resizeFn = (void *)HookTable::Instance().Vector_Player_Resize;
-    if (resizeFn && instance->m_palyers.size() <= index) {
-        ResizeEastlPlayerVector<SGG::Player *>(resizeFn, &instance->m_palyers, index + 1);
+    // Engine pre-allocates m_palyers and m_inputMethods at size 2. Grow both
+    // via the engine's own resize (resolved at init) so old + new storage
+    // share the same forge allocator and per-slot input handles have a home.
+    auto *resizePlayers = (void *)HookTable::Instance().Vector_Player_Resize;
+    if (resizePlayers && instance->m_palyers.size() <= index) {
+        ResizeEastlPlayerVector<SGG::Player *>(resizePlayers, &instance->m_palyers, index + 1);
+    }
+    auto *resizeInputs = (void *)HookTable::Instance().Vector_InputHandler_Resize;
+    if (resizeInputs && instance->m_inputMethods.size() <= index) {
+        ResizeEastlPlayerVector<SGG::InputHandler *>(resizeInputs, &instance->m_inputMethods, index + 1);
     }
 
     if (instance->m_palyers.size() <= index)
@@ -101,7 +104,11 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
     if (instance->m_palyers[index] != nullptr)
         return nullptr;
 
-    uint8_t controller = 1;
+    // Each slot gets its own controller index (previously hardcoded to 1, which
+    // hijacked P2's input whenever a 3rd slot was created). Slot 0 keeps
+    // controller 0, slot 1 keeps controller 1 — unchanged for 2-player runs —
+    // and new slots take their own.
+    uint8_t controller = static_cast<uint8_t>(index);
 
     auto player = instance->AddPlayer(index);
 
