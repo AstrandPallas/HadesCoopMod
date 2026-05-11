@@ -94,11 +94,10 @@ MainMenuAPIAddGamemode("Coop", function(name)
     menu:AddReflection("mMessageText", message)
 
     local btn = CreateGUIComponentButton(menu)
-    local startBtn = CreateGUIComponentButton(menu)
 
-    -- Build the per-state message text. For states P2..P4 selected, the body
-    -- lists each player's controller and (if more can join) a hint that the
-    -- "Press to add" button accepts another device.
+    -- Build the per-state message text — list each selected player's controller
+    -- on its own line, plus (when 2+ are selected and more can join) a hint that
+    -- pressing an already-bound device will start the game.
     local function MessageForSelected(n)
         local template = GetDisplayName { Text = "CoopMenu_PlayerController" }
         local lines = {}
@@ -118,33 +117,31 @@ MainMenuAPIAddGamemode("Coop", function(name)
         if state == MENU_STATE.START then
             message:SetTextLocalizationKey("CoopMenu_StartMessage")
             btn:SetTextLocalizationKey("CoopMenu_P1Press")
-            startBtn:SetText("")
         elseif state == MENU_STATE.PLAYER_ONE_SELECTED then
             message:SetText(MessageForSelected(1))
             btn:SetTextLocalizationKey("CoopMenu_P2Press")
-            startBtn:SetText("")
         elseif state == MENU_STATE.PLAYER_TWO_SELECTED
             or state == MENU_STATE.PLAYER_THREE_SELECTED
             or state == MENU_STATE.PLAYER_FOUR_SELECTED then
-            message:SetText(MessageForSelected(n))
+            local body = MessageForSelected(n)
             if n < MAX_COOP_PLAYERS then
-                btn:SetText("Press a controller to add Player " .. (n + 1))
+                body = body .. "\n\nPress a new controller to add Player " .. (n + 1)
+                    .. ",\nor press any selected controller to begin."
+                btn:SetText(START_BUTTON_MESSAGES[math.random(1, #START_BUTTON_MESSAGES)])
             else
-                btn:SetText("")
+                body = body .. "\n\nPress any controller to begin."
+                btn:SetText(START_BUTTON_MESSAGES[math.random(1, #START_BUTTON_MESSAGES)])
             end
-            startBtn:SetText(START_BUTTON_MESSAGES[math.random(1, #START_BUTTON_MESSAGES)])
+            message:SetText(body)
         elseif state == MENU_STATE.INVALID_STATE_SECOND_KEYBOARD then
             message:SetTextLocalizationKey("CoopMenu_ErrP1KBOnly")
             btn:SetTextLocalizationKey("CoopMenu_Again")
-            startBtn:SetText("")
         elseif state == MENU_STATE.INVALID_STATE_SAME_DEVICE then
             message:SetTextLocalizationKey("CoopMenu_ErrDeviceCollision")
             btn:SetTextLocalizationKey("CoopMenu_Again")
-            startBtn:SetText("")
         else
             message:SetText("Error description is missing :D")
             btn:SetTextLocalizationKey("CoopMenu_Again")
-            startBtn:SetText("")
         end
     end
 
@@ -170,28 +167,37 @@ MainMenuAPIAddGamemode("Coop", function(name)
     btn:AddActivationHandler(function()
         local n = #SelectedGuiControl
 
-        -- Error-recovery: just go back to the appropriate "ready" state without
-        -- discarding earlier selections.
+        -- Error-recovery: return to the appropriate "ready" state without
+        -- discarding earlier selections; user retries with a fresh press.
         if CURRENT_MENU_STATE == MENU_STATE.INVALID_STATE_SECOND_KEYBOARD
             or CURRENT_MENU_STATE == MENU_STATE.INVALID_STATE_SAME_DEVICE then
             SetStage(SelectedStateFor(n))
             return
         end
 
+        local device = GetCurrentControl()
+
+        -- Once at the max, any press starts the game.
         if n >= MAX_COOP_PLAYERS then
+            StartGameNow()
             return
         end
 
-        local device = GetCurrentControl()
+        -- At 2+ players, pressing an already-selected device starts the game.
+        if n >= 2 and MatchesExistingDevice(device) then
+            StartGameNow()
+            return
+        end
 
-        -- Keyboard is allowed only for P1.
+        -- Otherwise we're trying to add a new player. Validate first.
         if device.Device == "Keyboard" and n >= 1 then
             SetStage(MENU_STATE.INVALID_STATE_SECOND_KEYBOARD)
             return
         end
 
-        -- A new player must use a device not already claimed.
         if n >= 1 and MatchesExistingDevice(device) then
+            -- At the P1_SELECTED stage same-device is an error (need >= 2 to
+            -- start). At 2+ the matches-existing path above already started.
             SetStage(MENU_STATE.INVALID_STATE_SAME_DEVICE)
             return
         end
@@ -200,15 +206,7 @@ MainMenuAPIAddGamemode("Coop", function(name)
         SetStage(SelectedStateFor(n + 1))
     end)
 
-    startBtn:AddActivationHandler(function()
-        -- Only valid once at least 2 players are configured.
-        if #SelectedGuiControl >= 2 then
-            StartGameNow()
-        end
-    end)
-
     menu:AddReflection("mControllerPress", btn)
-    menu:AddReflection("mStartGame", startBtn)
 
     menu:LoadDefenitions("../Mods/TN_CoopMod/ControllerSelectionMenuScreen.sjson")
 end)
