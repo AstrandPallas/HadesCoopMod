@@ -84,6 +84,14 @@ function OnProjectileDeath(args)
             end
         end
 
+        -- Vanilla Combat.lua:2848 dereferences attacker.ObjectId without a nil check.
+        -- AttackerTable goes nil when a player dies while their projectile is still
+        -- in flight (co-op-specific). The dead player has nowhere to store ammo, so
+        -- short-circuiting the handler is functionally equivalent and avoids the crash.
+        if attacker == nil then
+            return
+        end
+
         if isAttackerPlayer then
             HeroContext.RunWithHeroContext(attacker, originalHandler, triggerArgs)
         elseif isVictimPlayer then
