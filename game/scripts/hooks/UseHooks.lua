@@ -10,6 +10,30 @@ local HeroContext = ModRequire "../HeroContext.lua"
 ---@type ILootDelivery
 local LootDelivery = ModRequire "../loot/LootInterface.lua"
 
+-- Closest alive hero whose RangedWeapon ammo isn't already at max.
+-- Used to redirect cast/AmmoPack returns away from a player who can't accept them.
+---@param itemObjectId number
+---@param excludeUnitId? number
+---@return table?
+local function GetClosestHeroWithAmmoCapacity(itemObjectId, excludeUnitId)
+    local closestHero
+    local closestDist = math.huge
+    for _, hero in CoopPlayers.PlayersIterator() do
+        if hero and not hero.IsDead and hero.ObjectId and hero.ObjectId ~= excludeUnitId then
+            local cur = GetWeaponProperty { Id = hero.ObjectId, WeaponName = "RangedWeapon", Property = "Ammo" } or 0
+            local mx  = GetWeaponMaxAmmo  { Id = hero.ObjectId, WeaponName = "RangedWeapon" } or 0
+            if cur < mx then
+                local d = GetDistance { Id = itemObjectId, DestinationId = hero.ObjectId }
+                if d and d < closestDist then
+                    closestDist = d
+                    closestHero = hero
+                end
+            end
+        end
+    end
+    return closestHero
+end
+
 local _OnUsed = OnUsed
 OnUsed = function(args)
     if type(args[1]) == "function" then
@@ -58,15 +82,22 @@ OnUsed = function(args)
 
                     if current >= max then
                         if not item.coopDisableMagneto then
+                            item.coopDisableMagneto = true
                             SetObstacleProperty({
                                 Property = "Magnetism",
                                 Value = 0,
-                                DestinationId =
-                                    item.ObjectId
+                                DestinationId = item.ObjectId
                             })
-                            item.coopDisableMagneto = true
                             thread(function()
-                                wait(1.0)
+                                local target = GetClosestHeroWithAmmoCapacity(item.ObjectId, triggerArgs.UserId)
+                                if target then
+                                    -- Send the AmmoPack to a player who can actually pick it up.
+                                    -- Magnetism re-engages near the destination and finishes the pickup.
+                                    Move({ Id = item.ObjectId, DestinationId = target.ObjectId, Duration = 0.5 })
+                                    wait(0.5)
+                                else
+                                    wait(1.0)
+                                end
                                 SetObstacleProperty({
                                     Property = "Magnetism",
                                     Value = 3000,
