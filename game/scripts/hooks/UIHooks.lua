@@ -122,25 +122,54 @@ function UIHooks.InitHooks()
             basefun(mainHero)
         end
         SecondPlayerUi.UpdateLifePips()
+        for playerId, ui in pairs(CoopPlayerUi.Instances) do
+            if playerId ~= 2 then
+                ui:UpdateLifePips()
+            end
+        end
     end)
 
     local _AddLastStand = AddLastStand
     AddLastStand = function(args)
-        local isSecondPlayer = CoopPlayers.GetMainHero() ~= HeroContext.GetCurrentHeroContext()
+        local currentHero = HeroContext.GetCurrentHeroContext()
+        local mainHero = CoopPlayers.GetMainHero()
+        local playerId = currentHero and CoopPlayers.GetPlayerByHero(currentHero)
+
+        if not playerId or currentHero == mainHero then
+            _AddLastStand(args)
+            return
+        end
+
+        -- Non-main player: redirect ScreenAnchors.LifePipIds to that player's
+        -- anchors so vanilla code mutates the right pip set, and override
+        -- CreateScreenObstacle to either reflect the X (P2's original hack
+        -- for the BR layout) or be a no-op for P3/P4 (their visuals get
+        -- rebuilt from hero state via UpdateLifePips below — the BR-specific
+        -- X-flip math wouldn't make sense for TL/TR anyway).
         local pipsBackup = ScreenAnchors.LifePipIds
         local _CreateScreenObstacle = CreateScreenObstacle
-        if isSecondPlayer then
+
+        if playerId == 2 then
             ScreenAnchors.LifePipIds = SecondPlayerUi.ScreenAnchors.LifePipIds
             CreateScreenObstacle = function(args)
                 args.X = (ScreenWidth - 80) - (args.X - 70)
             end
+        else
+            local ui = CoopPlayerUi.Get(playerId)
+            if ui then
+                ScreenAnchors.LifePipIds = ui.ScreenAnchors.LifePipIds
+            end
+            CreateScreenObstacle = function(args) end
         end
 
         _AddLastStand(args)
 
-        if isSecondPlayer then
-            ScreenAnchors.LifePipIds = pipsBackup
-            CreateScreenObstacle = _CreateScreenObstacle
+        ScreenAnchors.LifePipIds = pipsBackup
+        CreateScreenObstacle = _CreateScreenObstacle
+
+        if playerId >= 3 then
+            local ui = CoopPlayerUi.Get(playerId)
+            if ui then ui:UpdateLifePips() end
         end
     end
 
@@ -198,18 +227,35 @@ function UIHooks.InitHooks()
     end
 
     HookUtils.wrap("AddAmmoPresentation", function(baseFun, ...)
-        if CurrentRun.Hero == CoopPlayers.GetHero(2) then
+        local hero = CurrentRun.Hero
+        local playerId = hero and CoopPlayers.GetPlayerByHero(hero)
+
+        if playerId == nil or playerId == 1 then
+            -- Main hero (or no co-op context) — vanilla.
+            baseFun(...)
+            return
+        end
+
+        if playerId == 2 then
             thread(SecondPlayerUi.UpdateAmmoUI)
-
-            CreateAnimation({ Name = "QuickFlashRedSmall", DestinationId = CurrentRun.Hero.ObjectId, OffsetZ = -90 })
-
+            CreateAnimation({ Name = "QuickFlashRedSmall", DestinationId = hero.ObjectId, OffsetZ = -90 })
             if SecondPlayerUi.ScreenAnchors.AmmoIndicatorUI ~= nil then
-                ModifyTextBox({ Id = SecondPlayerUi.ScreenAnchors.AmmoIndicatorUI, ColorTarget = Color.White, ColorDuration = 0.5, AutoSetDataProperties = false, })
+                ModifyTextBox({ Id = SecondPlayerUi.ScreenAnchors.AmmoIndicatorUI, ColorTarget = Color.White, ColorDuration = 0.5, AutoSetDataProperties = false })
                 thread(PulseText,
                     { ScreenAnchorReference = "AmmoIndicatorUI", ScaleTarget = 1.3, ScaleDuration = 0.125, HoldDuration = 0.1, PulseBias = 0.2 })
             end
         else
-            baseFun(...);
+            -- P3 / P4: same visual treatment but addressed by Id rather than
+            -- the SecondPlayerUi-specific ScreenAnchorReference name.
+            local ui = CoopPlayerUi.Get(playerId)
+            if ui then
+                thread(function() ui:UpdateAmmoUI() end)
+                CreateAnimation({ Name = "QuickFlashRedSmall", DestinationId = hero.ObjectId, OffsetZ = -90 })
+                if ui.ScreenAnchors.AmmoIndicatorUI ~= nil then
+                    ModifyTextBox({ Id = ui.ScreenAnchors.AmmoIndicatorUI, ColorTarget = Color.White, ColorDuration = 0.5, AutoSetDataProperties = false })
+                    thread(PulseText, { Id = ui.ScreenAnchors.AmmoIndicatorUI, ScaleTarget = 1.3, ScaleDuration = 0.125, HoldDuration = 0.1, PulseBias = 0.2 })
+                end
+            end
         end
     end)
 
@@ -223,6 +269,14 @@ function UIHooks.InitHooks()
         local secondHero = CoopPlayers.GetHero(2)
         if secondHero then
             HeroContext.RunWithHeroContext(secondHero, SecondPlayerUi.HideGunUI)
+        end
+        for playerId, ui in pairs(CoopPlayerUi.Instances) do
+            if playerId ~= 2 then
+                local hero = CoopPlayers.GetHero(playerId)
+                if hero then
+                    HeroContext.RunWithHeroContext(hero, function() ui:HideGunUI() end)
+                end
+            end
         end
     end
 
@@ -291,6 +345,20 @@ function UIHooks.InitHooks()
             thread(function()
                 HeroContext.RunWithHeroContext(hero, execFun)
             end)
+        end
+
+        for playerId, ui in pairs(CoopPlayerUi.Instances) do
+            if playerId ~= 2 then
+                local p = CoopPlayers.GetHero(playerId)
+                if p then
+                    local show = hasHeroWeaponWithIcon(p)
+                    thread(function()
+                        HeroContext.RunWithHeroContext(p, function()
+                            if show then ui:ShowGunUI() else ui:HideGunUI() end
+                        end)
+                    end)
+                end
+            end
         end
     end
 
