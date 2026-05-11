@@ -7,6 +7,8 @@
 #include "../interface/PlayerManager.h"
 #include "../HookTable.h"
 
+#include <cstring>
+
 // EASTL vector::resize(size_type n, const value_type& value).
 // __fastcall on x64 Windows: rcx=this, rdx=n, r8=&value.
 // We pass a pointer-to-nullptr as the fill value.
@@ -16,6 +18,15 @@ static void ResizeEastlPlayerVector(void *resizeFnPtr, void *vec, size_t newSize
     auto fn = (void(__fastcall *)(void *, size_t, T const *))resizeFnPtr;
     fn(vec, newSize, &fillValue);
 }
+
+// Static storage for the input handlers we synthesize for slots beyond what
+// Hades pre-creates (the engine builds 2 entries in m_inputMethods at startup;
+// we provide our own for slots 2+ = P3+). These live for process lifetime and
+// are never freed — m_inputMethods only stores pointers, so the engine's own
+// destructors won't try to delete our static storage. Initialized by copying
+// the existing gamepad handler (m_inputMethods[1]) so internal engine state
+// (deadzone, repeat-delay, direction caches, etc.) is consistent.
+static SGG::InputHandler g_extraInputHandlers[MAX_PLAYERS];
 
 bool PlayerManagerExtension::AssignGamepad(size_t playerIndex, uint8_t gamepadIndex) {
     if (GetPlayersCount() < playerIndex + 1)
@@ -96,6 +107,23 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
     auto *resizeInputs = (void *)HookTable::Instance().Vector_InputHandler_Resize;
     if (resizeInputs && instance->m_inputMethods.size() <= index) {
         ResizeEastlPlayerVector<SGG::InputHandler *>(resizeInputs, &instance->m_inputMethods, index + 1);
+    }
+
+    // Slots 0 and 1 use the engine's own InputHandlers (keyboard, gamepad).
+    // For slot >= 2, point m_inputMethods[index] at our static storage so
+    // AssignGamepad / GetInput find a real handler instead of nullptr.
+    // Copy state from the existing gamepad handler at slot 1 so the new
+    // handler's internal fields (deadzone, repeat delay, etc.) are sane.
+    if (index >= 2
+        && instance->m_inputMethods.size() > index
+        && instance->m_inputMethods[index] == nullptr) {
+        SGG::InputHandler *newHandler = &g_extraInputHandlers[index];
+        if (instance->m_inputMethods.size() > 1 && instance->m_inputMethods[1] != nullptr) {
+            std::memcpy(newHandler, instance->m_inputMethods[1], sizeof(SGG::InputHandler));
+        } else {
+            std::memset(newHandler, 0, sizeof(SGG::InputHandler));
+        }
+        instance->m_inputMethods[index] = newHandler;
     }
 
     if (instance->m_palyers.size() <= index)
