@@ -13,23 +13,30 @@ local CoopPlayerUi = ModRequire "CoopPlayerUi.lua"
 ---@class SecondPlayerUi
 local SecondPlayerUi = {}
 
+-- Pre-populated with an empty table so early `SecondPlayerUi.ScreenAnchors.X`
+-- reads from UIHooks closures don't nil-index. Instance creation is deferred
+-- to first use because LayoutForCorner("BR") references ScreenWidth, which
+-- the engine hasn't defined yet at module-load time.
+SecondPlayerUi.ScreenAnchors = {}
+
 local cachedInstance
 
 local function GetInstance()
     if cachedInstance == nil then
         cachedInstance = CoopPlayerUi.Get(2)
-            or CoopPlayerUi.Create(2, CoopPlayerUi.LayoutForCorner("BR"))
-        -- Expose the same ScreenAnchors table the original file did; UIHooks
-        -- still reads SecondPlayerUi.ScreenAnchors directly in a few spots.
-        SecondPlayerUi.ScreenAnchors = cachedInstance.ScreenAnchors
+        if cachedInstance == nil then
+            cachedInstance = CoopPlayerUi.Create(2, CoopPlayerUi.LayoutForCorner("BR"))
+        end
+        -- Share storage with the placeholder ScreenAnchors so any references
+        -- captured earlier still see live data: copy any existing entries
+        -- across, then point the instance at our table.
+        for k, v in pairs(cachedInstance.ScreenAnchors) do
+            SecondPlayerUi.ScreenAnchors[k] = v
+        end
+        cachedInstance.ScreenAnchors = SecondPlayerUi.ScreenAnchors
     end
     return cachedInstance
 end
-
--- Eagerly create on file load so SecondPlayerUi.ScreenAnchors is non-nil for
--- early call sites (e.g. ammo-bar indexing in DamageHooks.OnHit before any
--- show/update has fired yet).
-GetInstance()
 
 -- Forwarding methods. Each just delegates to the cached P2 instance.
 function SecondPlayerUi.ShowHealthUI()                 GetInstance():ShowHealthUI() end
