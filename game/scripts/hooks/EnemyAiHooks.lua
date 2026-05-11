@@ -35,7 +35,9 @@ function EnemyAiHooks.getNearestHero(unitId)
 
     for playerId = 1, CoopPlayers.GetPlayersCount() do
         local hero = CoopPlayers.GetHero(playerId)
-        if hero.IsDead then
+        -- An engine slot can exist without a Lua hero record (e.g. a 3rd
+        -- player slot allocated before InitCoopUnit has run for it).
+        if hero == nil or hero.IsDead then
             goto continue
         end
         local thisDistance = GetDistance { Id = hero.ObjectId, DestinationId = unitId }
