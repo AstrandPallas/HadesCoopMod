@@ -9,6 +9,8 @@ local CoopPlayers = ModRequire "../CoopPlayers.lua"
 local HeroContext = ModRequire "../HeroContext.lua"
 ---@type SecondPlayerUi
 local SecondPlayerUi = ModRequire "../SecondPlayerUI.lua"
+---@type CoopPlayerUi
+local CoopPlayerUi = ModRequire "../CoopPlayerUi.lua"
 ---@type HeroContextWrapper
 local HeroContextWrapper = ModRequire "../HeroContextWrapper.lua"
 ---@type HookUtils
@@ -62,6 +64,15 @@ function OnHit(args)
                 UpdateHealthUI()
             elseif victim == CoopPlayers.GetHero(2) then
                 SecondPlayerUi.UpdateHealthUI()
+            else
+                -- Player 3 / 4 — find which slot and update its UI instance.
+                local victimPlayerId = CoopPlayers.GetPlayerByHero(victim)
+                if victimPlayerId then
+                    local ui = CoopPlayerUi.Get(victimPlayerId)
+                    if ui then
+                        ui:UpdateHealthUI()
+                    end
+                end
             end
         end
     end }

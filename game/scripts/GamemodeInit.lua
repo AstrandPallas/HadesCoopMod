@@ -9,6 +9,8 @@ local HookUtils = ModRequire "HookUtils.lua"
 local CoopPlayers = ModRequire "CoopPlayers.lua"
 ---@type SecondPlayerUi
 local SecondPlayerUi = ModRequire "SecondPlayerUI.lua"
+---@type CoopPlayerUi
+local CoopPlayerUi = ModRequire "CoopPlayerUi.lua"
 ---@type HeroContext
 local HeroContext = ModRequire "HeroContext.lua"
 ---@type CoopCamera
@@ -90,6 +92,34 @@ OnAnyLoad {
                 CoopPlayers.UpdateMainHero()
                 CoopPlayers.InitCoopUnit(2)
                 SecondPlayerUi.Refresh()
+
+                -- Spawn UI for any additional players the menu collected
+                -- (slots 3 and 4). P2 still uses SecondPlayerUi at bottom-right.
+                -- P3 top-left, P4 top-right.
+                local playersCount = CoopPlayers.GetPlayersCount()
+                if playersCount >= 3 then
+                    CoopPlayers.InitCoopUnit(3)
+                    if not CoopPlayerUi.Get(3) then
+                        CoopPlayerUi.Create(3, {
+                            anchorX = 10,
+                            anchorY = 50,
+                            shadowFlipX = false,
+                            shadowFlipY = true,
+                        })
+                    end
+                end
+                if playersCount >= 4 then
+                    CoopPlayers.InitCoopUnit(4)
+                    if not CoopPlayerUi.Get(4) then
+                        CoopPlayerUi.Create(4, {
+                            anchorX = ScreenWidth - 500,
+                            anchorY = 50,
+                            shadowFlipX = true,
+                            shadowFlipY = true,
+                        })
+                    end
+                end
+                CoopPlayerUi.RefreshAll()
             end)
         end
     end

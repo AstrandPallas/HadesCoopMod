@@ -5,6 +5,8 @@
 
 ---@type SecondPlayerUi
 local SecondPlayerUi = ModRequire "../SecondPlayerUI.lua"
+---@type CoopPlayerUi
+local CoopPlayerUi = ModRequire "../CoopPlayerUi.lua"
 ---@type CombinedTraitsUI
 local CombinedTraitsUI = ModRequire "../CombinedTraitsUI.lua"
 ---@type CoopPlayers
@@ -26,6 +28,19 @@ function UIHooks.ShouldBeUiVisibleFor(hero)
 end
 
 ---@private
+-- For P3+, dispatch to the matching CoopPlayerUi method when one exists.
+-- Method names align with SecondPlayerUi's (e.g. UpdateHealthUI, ShowHealthUI).
+---@param funcName string
+local function CallExtraPlayerUis(funcName)
+    for playerId, ui in pairs(CoopPlayerUi.Instances) do
+        local hero = CoopPlayers.GetHero(playerId)
+        if hero and ui[funcName] then
+            HeroContext.RunWithHeroContext(hero, ui[funcName], ui)
+        end
+    end
+end
+
+---@private
 ---@param funcName string
 function UIHooks.CreateSimpleHook(funcName)
     local orig = _G[funcName]
@@ -36,6 +51,7 @@ function UIHooks.CreateSimpleHook(funcName)
         if secondHero then
             HeroContext.RunWithHeroContext(secondHero, SecondPlayerUi[funcName], ...)
         end
+        CallExtraPlayerUis(funcName)
     end
 end
 
@@ -52,6 +68,12 @@ function UIHooks.SimpleHookWithVisibilityCheck(funcName)
         if UIHooks.ShouldBeUiVisibleFor(secondHero) then
             HeroContext.RunWithHeroContext(secondHero, SecondPlayerUi[funcName], ...)
         end
+        for playerId, ui in pairs(CoopPlayerUi.Instances) do
+            local hero = CoopPlayers.GetHero(playerId)
+            if UIHooks.ShouldBeUiVisibleFor(hero) and ui[funcName] then
+                HeroContext.RunWithHeroContext(hero, ui[funcName], ui)
+            end
+        end
     end
 end
 
@@ -67,9 +89,17 @@ function UIHooks.InitHooks()
     UIHooks.SimpleHookWithVisibilityCheck("ShowHealthUI")
 
     UIHooks.CreateSimpleHook("UpdateHealthUI")
-    HookUtils.onPostFunction("DestroyHealthUI", SecondPlayerUi.DestroyHealthUI)
+    HookUtils.onPostFunction("DestroyHealthUI", function()
+        SecondPlayerUi.DestroyHealthUI()
+        for _, ui in pairs(CoopPlayerUi.Instances) do
+            ui:DestroyHealthUI()
+        end
+    end)
     HookUtils.onPreFunction("HideHealthUI", function()
         thread(SecondPlayerUi.HideHealthUI)
+        for _, ui in pairs(CoopPlayerUi.Instances) do
+            thread(function() ui:HideHealthUI() end)
+        end
     end)
     HookUtils.onPostFunction("UpdateRallyHealthUI", SecondPlayerUi.UpdateRallyHealthUI)
 
