@@ -91,32 +91,21 @@ OnAnyLoad {
                 CoopPlayers.SetMainHero(HeroContext.GetDefaultHero())
                 CoopPlayers.UpdateMainHero()
                 CoopPlayers.InitCoopUnit(2)
-                SecondPlayerUi.Refresh()
 
-                -- Spawn UI for any additional players the menu collected
-                -- (slots 3 and 4). P2 still uses SecondPlayerUi at bottom-right.
-                -- P3 top-left, P4 top-right.
+                -- Spawn UI instances for any additional players the menu
+                -- collected. P2 is created lazily by the SecondPlayerUi shim
+                -- (BR corner); P3 -> top-left, P4 -> top-right here.
                 local playersCount = CoopPlayers.GetPlayersCount()
                 if playersCount >= 3 then
                     CoopPlayers.InitCoopUnit(3)
                     if not CoopPlayerUi.Get(3) then
-                        CoopPlayerUi.Create(3, {
-                            anchorX = 10,
-                            anchorY = 50,
-                            shadowFlipX = false,
-                            shadowFlipY = true,
-                        })
+                        CoopPlayerUi.Create(3, CoopPlayerUi.LayoutForCorner("TL"))
                     end
                 end
                 if playersCount >= 4 then
                     CoopPlayers.InitCoopUnit(4)
                     if not CoopPlayerUi.Get(4) then
-                        CoopPlayerUi.Create(4, {
-                            anchorX = ScreenWidth - 500,
-                            anchorY = 50,
-                            shadowFlipX = true,
-                            shadowFlipY = true,
-                        })
+                        CoopPlayerUi.Create(4, CoopPlayerUi.LayoutForCorner("TR"))
                     end
                 end
                 CoopPlayerUi.RefreshAll()

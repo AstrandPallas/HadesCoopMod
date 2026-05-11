@@ -29,13 +29,17 @@ end
 
 ---@private
 -- For P3+, dispatch to the matching CoopPlayerUi method when one exists.
--- Method names align with SecondPlayerUi's (e.g. UpdateHealthUI, ShowHealthUI).
+-- P2 is handled separately via the SecondPlayerUi shim (which itself wraps a
+-- P2 CoopPlayerUi instance), so we skip playerId == 2 here to avoid calling
+-- P2's methods twice per event.
 ---@param funcName string
 local function CallExtraPlayerUis(funcName)
     for playerId, ui in pairs(CoopPlayerUi.Instances) do
-        local hero = CoopPlayers.GetHero(playerId)
-        if hero and ui[funcName] then
-            HeroContext.RunWithHeroContext(hero, ui[funcName], ui)
+        if playerId ~= 2 then
+            local hero = CoopPlayers.GetHero(playerId)
+            if hero and ui[funcName] then
+                HeroContext.RunWithHeroContext(hero, ui[funcName], ui)
+            end
         end
     end
 end
@@ -69,9 +73,11 @@ function UIHooks.SimpleHookWithVisibilityCheck(funcName)
             HeroContext.RunWithHeroContext(secondHero, SecondPlayerUi[funcName], ...)
         end
         for playerId, ui in pairs(CoopPlayerUi.Instances) do
-            local hero = CoopPlayers.GetHero(playerId)
-            if UIHooks.ShouldBeUiVisibleFor(hero) and ui[funcName] then
-                HeroContext.RunWithHeroContext(hero, ui[funcName], ui)
+            if playerId ~= 2 then
+                local hero = CoopPlayers.GetHero(playerId)
+                if UIHooks.ShouldBeUiVisibleFor(hero) and ui[funcName] then
+                    HeroContext.RunWithHeroContext(hero, ui[funcName], ui)
+                end
             end
         end
     end
@@ -91,14 +97,18 @@ function UIHooks.InitHooks()
     UIHooks.CreateSimpleHook("UpdateHealthUI")
     HookUtils.onPostFunction("DestroyHealthUI", function()
         SecondPlayerUi.DestroyHealthUI()
-        for _, ui in pairs(CoopPlayerUi.Instances) do
-            ui:DestroyHealthUI()
+        for playerId, ui in pairs(CoopPlayerUi.Instances) do
+            if playerId ~= 2 then
+                ui:DestroyHealthUI()
+            end
         end
     end)
     HookUtils.onPreFunction("HideHealthUI", function()
         thread(SecondPlayerUi.HideHealthUI)
-        for _, ui in pairs(CoopPlayerUi.Instances) do
-            thread(function() ui:HideHealthUI() end)
+        for playerId, ui in pairs(CoopPlayerUi.Instances) do
+            if playerId ~= 2 then
+                thread(function() ui:HideHealthUI() end)
+            end
         end
     end)
     HookUtils.onPostFunction("UpdateRallyHealthUI", SecondPlayerUi.UpdateRallyHealthUI)
@@ -159,16 +169,31 @@ function UIHooks.InitHooks()
     UpdateAmmoUI = function()
         local mainHero = CoopPlayers.GetMainHero()
         if HeroContext.IsHeroContextExplicit() then
-            if HeroContext.GetCurrentHeroContext() == mainHero then
+            local currentHero = HeroContext.GetCurrentHeroContext()
+            if currentHero == mainHero then
                 _UpdateAmmoUI()
             else
-                SecondPlayerUi.UpdateAmmoUI()
+                local playerId = CoopPlayers.GetPlayerByHero(currentHero)
+                if playerId == 2 then
+                    SecondPlayerUi.UpdateAmmoUI()
+                elseif playerId then
+                    local ui = CoopPlayerUi.Get(playerId)
+                    if ui then ui:UpdateAmmoUI() end
+                end
             end
         else
             HeroContext.RunWithHeroContext(mainHero, function()
                 _UpdateAmmoUI()
                 SecondPlayerUi.UpdateAmmoUI()
             end)
+            for playerId, ui in pairs(CoopPlayerUi.Instances) do
+                if playerId ~= 2 then
+                    local hero = CoopPlayers.GetHero(playerId)
+                    if hero then
+                        HeroContext.RunWithHeroContext(hero, function() ui:UpdateAmmoUI() end)
+                    end
+                end
+            end
         end
     end
 
@@ -212,11 +237,27 @@ function UIHooks.InitHooks()
                 HeroContext.RunWithHeroContext(mainHero, _UpdateGunUI)
             elseif currentHero == secondHero then
                 HeroContext.RunWithHeroContext(currentHero, SecondPlayerUi.UpdateGunUI)
+            else
+                local playerId = CoopPlayers.GetPlayerByHero(currentHero)
+                if playerId then
+                    local ui = CoopPlayerUi.Get(playerId)
+                    if ui then
+                        HeroContext.RunWithHeroContext(currentHero, function() ui:UpdateGunUI() end)
+                    end
+                end
             end
         else
             HeroContext.RunWithHeroContext(mainHero, _UpdateGunUI)
             if secondHero then
                 HeroContext.RunWithHeroContext(secondHero, SecondPlayerUi.UpdateGunUI)
+            end
+            for playerId, ui in pairs(CoopPlayerUi.Instances) do
+                if playerId ~= 2 then
+                    local hero = CoopPlayers.GetHero(playerId)
+                    if hero then
+                        HeroContext.RunWithHeroContext(hero, function() ui:UpdateGunUI() end)
+                    end
+                end
             end
         end
     end
