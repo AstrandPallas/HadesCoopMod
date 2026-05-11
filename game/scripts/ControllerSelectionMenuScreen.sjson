@@ -92,7 +92,7 @@
 
     ControllerPress = {
       X = 960
-      Y = 650
+      Y = 620
       Justification = "Center"
       VerticalJustification = "Center"
       TextOffsetX = 0
@@ -129,7 +129,47 @@
       HelpTextId = ""
       PressSound = "/SFX/Menu Sounds/GodBoonMenuClose"
     }
-    
+
+    StartGame = {
+      X = 960
+      Y = 685
+      Justification = "Center"
+      VerticalJustification = "Center"
+      TextOffsetX = 0
+      Graphic = "null"
+      SelectedOnAnimation = "null"
+      SelectOnMouseOver = true
+      DeselectOnMouseOff = true
+      UseTextArea = true
+      Font = "AlegreyaSansSCRegular"
+      TextRed = 0.75
+      TextGreen = 0.75
+      TextBlue = 0.75
+      FontSize = 28
+      SelectedTextRed = 0.808
+      SelectedTextGreen = 0.1
+      SelectedTextBlue = 0.1
+      DisabledTextRed = 0.2
+      DisabledTextGreen = 0.2
+      DisabledTextBlue = 0.2
+      AlwaysUpperCase = false
+      TextJustification = "Center"
+      SelectedTextScale = 1.0
+      NonEnglishScaleModifier = 0.85
+      TextOutlineRed = 0
+      TextOutlineGreen = 0
+      TextOutlineBlue = 0
+      OutlineThickness = 2
+      ShadowRed = 0
+      ShadowGreen = 0
+      ShadowBlue = 0
+      ShadowOffsetY = 3
+      ShadowAlpha = 1
+      ShadowBlur = 0
+      HelpTextId = ""
+      PressSound = "/SFX/Menu Sounds/GodBoonMenuClose"
+    }
+
 	CancelButton =
 	{
       Graphic = "CancelButtonFlash"
