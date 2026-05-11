@@ -90,22 +90,18 @@ OnAnyLoad {
                 end
                 CoopPlayers.SetMainHero(HeroContext.GetDefaultHero())
                 CoopPlayers.UpdateMainHero()
-                CoopPlayers.InitCoopUnit(2)
 
-                -- Spawn UI instances for any additional players the menu
-                -- collected. P2 is created lazily by the SecondPlayerUi shim
-                -- (BR corner); P3 -> top-left, P4 -> top-right here.
-                local playersCount = CoopPlayers.GetPlayersCount()
-                if playersCount >= 3 then
-                    CoopPlayers.InitCoopUnit(3)
-                    if not CoopPlayerUi.Get(3) then
-                        CoopPlayerUi.Create(3, CoopPlayerUi.LayoutForCorner("TL"))
-                    end
-                end
-                if playersCount >= 4 then
-                    CoopPlayers.InitCoopUnit(4)
-                    if not CoopPlayerUi.Get(4) then
-                        CoopPlayerUi.Create(4, CoopPlayerUi.LayoutForCorner("TR"))
+                -- Spawn a hero unit and UI for every co-op slot that exists in
+                -- the engine. CoopInit/InitCoopPlayer already allocated those
+                -- based on the menu's captured controller count, so this loop
+                -- naturally scales from 2 to 4. P2 keeps its bottom-right UI
+                -- via the SecondPlayerUi shim (constructed lazily on first
+                -- access); P3+ get the corner layouts from CoopPlayerUi.
+                local cornerForSlot = { [3] = "TL", [4] = "TR" }
+                for playerId = 2, CoopPlayers.GetPlayersCount() do
+                    CoopPlayers.InitCoopUnit(playerId)
+                    if playerId >= 3 and not CoopPlayerUi.Get(playerId) then
+                        CoopPlayerUi.Create(playerId, CoopPlayerUi.LayoutForCorner(cornerForSlot[playerId]))
                     end
                 end
                 CoopPlayerUi.RefreshAll()

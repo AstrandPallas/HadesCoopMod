@@ -95,14 +95,25 @@ function CoopPlayers.GetUnits()
 end
 
 function CoopPlayers.InitCoopPlayer()
-    local playerId = 2
+    -- Read the menu's captured controller list to know how many slots to allocate.
+    -- Falls back to a single extra slot (P2) when the user didn't pass through
+    -- the coop menu (e.g. resumed a save directly from main menu, or the menu
+    -- exited without writing TempRuntimeData) so 2-player behavior matches the
+    -- original mod exactly.
+    local schema = GetTempRuntimeData("TN_Coop:control") or {}
+    local requested = math.max(2, #schema)
 
-    if not CoopHasPlayer(playerId) then
-        playerId = CoopCreatePlayer()
-        CoopControl.InitControlSchemas()
+    local createdAny = false
+    for playerId = 2, requested do
+        if not CoopHasPlayer(playerId) then
+            CoopCreatePlayer()
+            createdAny = true
+        end
     end
 
-    return playerId
+    if createdAny then
+        CoopControl.InitControlSchemas()
+    end
 end
 
 ---@return boolean
