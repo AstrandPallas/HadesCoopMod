@@ -138,16 +138,17 @@ MainMenuAPIAddGamemode("Coop", function(name)
         elseif state == MENU_STATE.PLAYER_TWO_SELECTED
             or state == MENU_STATE.PLAYER_THREE_SELECTED
             or state == MENU_STATE.PLAYER_FOUR_SELECTED then
-            local body = MessageForSelected(n)
+            -- Keep the message text box to just the per-player list — it grows
+            -- vertically (center-justified) and overlaps the button area below
+            -- if we pack the prompt in too. Put the action prompt in the button
+            -- text instead; the button has its own slot at Y=650.
+            message:SetText(MessageForSelected(n))
             if n < MAX_COOP_PLAYERS then
-                body = body .. "\n\nPress a new controller to add Player " .. (n + 1)
-                    .. ",\nor press any selected controller to begin."
-                btn:SetText(START_BUTTON_MESSAGES[math.random(1, #START_BUTTON_MESSAGES)])
+                btn:SetText("Press a new controller to add P" .. (n + 1)
+                    .. ", or any selected controller to begin")
             else
-                body = body .. "\n\nPress any controller to begin."
                 btn:SetText(START_BUTTON_MESSAGES[math.random(1, #START_BUTTON_MESSAGES)])
             end
-            message:SetText(body)
         elseif state == MENU_STATE.INVALID_STATE_SECOND_KEYBOARD then
             message:SetTextLocalizationKey("CoopMenu_ErrP1KBOnly")
             btn:SetTextLocalizationKey("CoopMenu_Again")
