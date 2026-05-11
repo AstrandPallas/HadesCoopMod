@@ -33,6 +33,8 @@ local VulnerabilityHooks = ModRequire "hooks/VulnerabilityHooks.lua"
 local ResourceLoadingHooks = ModRequire "hooks/ResourceLoadingHooks.lua"
 ---@type TroveHooks
 local TroveHooks = ModRequire "hooks/TroveHooks.lua"
+---@type FoodHooks
+local FoodHooks = ModRequire "hooks/FoodHooks.lua"
 ---@type ILootDelivery
 local LootDelivery = ModRequire "loot/LootInterface.lua"
 
@@ -66,6 +68,7 @@ local function TryInstalBasicHooks()
     VulnerabilityHooks.InitHooks()
     ResourceLoadingHooks.InitHooks()
     TroveHooks.InitHooks()
+    FoodHooks.InitHooks()
     LootDelivery.InitHooks()
 end
 
