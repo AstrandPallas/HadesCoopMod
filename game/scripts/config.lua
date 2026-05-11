@@ -18,7 +18,7 @@ local Config = {
     -- This config is used for the "RoomDuplicated" loot delivery option
     RoomDuplicatedDelivery = {
         -- Enables duplication of the Chaos boons.
-        DuplicateChaosBoon = false;
+        DuplicateChaosBoon = true;
     },
     Player1HasOutline = true;
     Player1Outline = {
@@ -33,6 +33,24 @@ local Config = {
     Player2Outline = {
         R = 0,
         G = 200,
+        B = 0,
+        Opacity = 0.6,
+        Thickness = 2,
+        Threshold = 0.6,
+    };
+    Player3HasOutline = true,
+    Player3Outline = {
+        R = 220,
+        G = 200,
+        B = 0,
+        Opacity = 0.6,
+        Thickness = 2,
+        Threshold = 0.6,
+    };
+    Player4HasOutline = true,
+    Player4Outline = {
+        R = 230,
+        G = 110,
         B = 0,
         Opacity = 0.6,
         Thickness = 2,
