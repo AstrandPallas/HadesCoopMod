@@ -28,6 +28,7 @@ size_t CoopContext::CreatePlayer() {
     for (size_t i = 0; i < MAX_PLAYERS; i++) {
         if (!playerManager.HasPlayer(i)) {
             playerIndex = i;
+            break;
         }
     }
 

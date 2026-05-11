@@ -15,6 +15,12 @@ struct HookTable {
     size_t PlayerManager_AddPlayer;
     size_t PlayerManager_AssignController;
 
+    // Pointers to the engine's already-compiled EASTL vector::resize for
+    // the player/input vectors. Lets us grow m_palyers / m_inputMethods past
+    // the engine's built-in size of 2 (needed for 3rd/4th players).
+    size_t Vector_Player_Resize;
+    size_t Vector_InputHandler_Resize;
+
     size_t Player_Player;
 
     size_t PlayerUnit_PlayerUnit;

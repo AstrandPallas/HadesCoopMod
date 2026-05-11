@@ -5,6 +5,17 @@
 
 #include "PlayerManagerExtension.h"
 #include "../interface/PlayerManager.h"
+#include "../HookTable.h"
+
+// EASTL vector::resize(size_type n, const value_type& value).
+// __fastcall on x64 Windows: rcx=this, rdx=n, r8=&value.
+// We pass a pointer-to-nullptr as the fill value.
+template <typename T>
+static void ResizeEastlPlayerVector(void *resizeFnPtr, void *vec, size_t newSize) {
+    T fillValue = nullptr;
+    auto fn = (void(__fastcall *)(void *, size_t, T const *))resizeFnPtr;
+    fn(vec, newSize, &fillValue);
+}
 
 bool PlayerManagerExtension::AssignGamepad(size_t playerIndex, uint8_t gamepadIndex) {
     if (GetPlayersCount() < playerIndex + 1)
@@ -75,9 +86,17 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
     if (index >= MAX_PLAYERS)
         return nullptr;
 
-    // This struct has size 2 in the game
+    // Engine pre-allocates m_palyers at size 2. To allocate slot >= 2 we have
+    // to grow the vector first, using the engine's own resize (resolved via
+    // GetSymbolAddress at init) so the existing 2-slot storage and any new
+    // storage share the same allocator (forge).
+    auto *resizeFn = (void *)HookTable::Instance().Vector_Player_Resize;
+    if (resizeFn && instance->m_palyers.size() <= index) {
+        ResizeEastlPlayerVector<SGG::Player *>(resizeFn, &instance->m_palyers, index + 1);
+    }
+
     if (instance->m_palyers.size() <= index)
-        return nullptr;
+        return nullptr;  // resize didn't take — bail rather than corrupt memory
 
     if (instance->m_palyers[index] != nullptr)
         return nullptr;
