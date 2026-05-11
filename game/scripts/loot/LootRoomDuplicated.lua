@@ -245,6 +245,14 @@ function LootRoomDuplicated.Reset(heroesCount)
                     rewardType = room.ChosenRewardType,
                     lootName = trait.ForceBoonName
                 }
+            else
+                -- No keepsake-forced boon: mirror P1's so SpawnRoomReward's per-player
+                -- loop has a valid ForceLootName. Without this, vanilla SpawnRoomReward
+                -- spawns nothing for this player on the starting room.
+                LootRoomDuplicated.ChosenPlayerLoot[playerId] = {
+                    rewardType = room.ChosenRewardType,
+                    lootName = room.ForceLootName
+                }
             end
         end
     end
