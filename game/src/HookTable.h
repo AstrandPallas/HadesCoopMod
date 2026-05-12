@@ -21,6 +21,10 @@ struct HookTable {
     size_t Vector_Player_Resize;
     size_t Vector_InputHandler_Resize;
 
+    // Engine's InputHandler constructor — we placement-call this on our
+    // static storage to get a real engine-initialized handler for P3/P4.
+    size_t InputHandler_Constructor;
+
     size_t Player_Player;
 
     size_t PlayerUnit_PlayerUnit;

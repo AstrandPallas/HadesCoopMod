@@ -19,6 +19,7 @@ void HookTable::Init(IModApi::GetSymbolAddress_t GetSymbolAddress) {
         GetSymbolAddress("eastl::vector<sgg::Player *,eastl::allocator_forge>::resize");
     Vector_InputHandler_Resize =
         GetSymbolAddress("eastl::vector<sgg::InputHandler *,eastl::allocator_forge>::resize");
+    InputHandler_Constructor = GetSymbolAddress("sgg::InputHandler::InputHandler");
     Player_Player = GetSymbolAddress("sgg::Player::Player");
     PlayerUnit_PlayerUnit = GetSymbolAddress("sgg::PlayerUnit::PlayerUnit");
 

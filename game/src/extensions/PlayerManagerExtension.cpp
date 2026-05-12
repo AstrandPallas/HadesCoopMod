@@ -97,16 +97,30 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
     if (index >= MAX_PLAYERS)
         return nullptr;
 
-    // Engine pre-allocates m_palyers at size 2; grow it for slot >= 2 via the
-    // engine's own resize so the existing 2-slot storage and any new storage
-    // share the same forge allocator. m_inputMethods is intentionally NOT
-    // resized here — providing a synthesized handler (either memcpy'd from
-    // slot 1 or zero-initialized) caused hard crashes during room load, so
-    // for now slots >= 2 reuse slot 1's controller index. P3/P4 will share
-    // P2's gamepad routing until we wire up a proper per-slot input path.
+    // Grow m_palyers via the engine's own resize so the existing 2-slot storage
+    // and any new storage share the same forge allocator.
     auto *resizePlayers = (void *)HookTable::Instance().Vector_Player_Resize;
     if (resizePlayers && instance->m_palyers.size() <= index) {
         ResizeEastlPlayerVector<SGG::Player *>(resizePlayers, &instance->m_palyers, index + 1);
+    }
+
+    // Grow m_inputMethods the same way, then placement-construct a real
+    // engine InputHandler in our static storage and point the slot at it.
+    // The engine's constructor initializes whatever lives in the pad_end[0x64]
+    // tail — that's what zero-init / memcpy got wrong and caused the crashes.
+    auto *resizeInputs = (void *)HookTable::Instance().Vector_InputHandler_Resize;
+    if (resizeInputs && instance->m_inputMethods.size() <= index) {
+        ResizeEastlPlayerVector<SGG::InputHandler *>(resizeInputs, &instance->m_inputMethods, index + 1);
+    }
+    if (index >= 2
+        && instance->m_inputMethods.size() > index
+        && instance->m_inputMethods[index] == nullptr) {
+        SGG::InputHandler *newHandler = &g_extraInputHandlers[index];
+        auto ctor = (void(__fastcall *)(void *))HookTable::Instance().InputHandler_Constructor;
+        if (ctor) {
+            ctor(newHandler);
+            instance->m_inputMethods[index] = newHandler;
+        }
     }
 
     if (instance->m_palyers.size() <= index)
@@ -115,11 +129,11 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
     if (instance->m_palyers[index] != nullptr)
         return nullptr;
 
-    // Use controller index 1 for any slot beyond 0 — that's what the original
-    // mod did for slot 1, and it points at a real engine-managed InputHandler
-    // (the gamepad slot). For slot >= 2 this means input is shared with P2,
-    // but at least the engine doesn't dereference a synthesized handler.
-    uint8_t controller = (index == 0) ? 0 : 1;
+    // Each slot gets its own controller index — slot 0 keeps controller 0
+    // (vanilla keyboard), slot 1 keeps controller 1 (vanilla gamepad), and
+    // slots 2+ get fresh indices that point at our placement-constructed
+    // handlers, giving P3 and P4 independent gamepad routing.
+    uint8_t controller = static_cast<uint8_t>(index);
 
     auto player = instance->AddPlayer(index);
 
