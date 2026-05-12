@@ -110,19 +110,18 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
     }
 
     // Slots 0 and 1 use the engine's own InputHandlers (keyboard, gamepad).
-    // For slot >= 2, point m_inputMethods[index] at our static storage so
-    // AssignGamepad / GetInput find a real handler instead of nullptr.
-    // Copy state from the existing gamepad handler at slot 1 so the new
-    // handler's internal fields (deadzone, repeat delay, etc.) are sane.
+    // For slot >= 2, point m_inputMethods[index] at zero-initialized static
+    // storage so AssignGamepad / GetInput find a real handler instead of
+    // nullptr. Earlier we tried memcpy'ing slot 1's handler, but the
+    // pad_end[0x64] block at the end of InputHandler likely holds engine
+    // pointers / state that doesn't survive duplication, so we just zero
+    // out the new entries and let the menu's CoopSetPlayerGamepad call
+    // populate the gamepad id explicitly through SetGamepadId.
     if (index >= 2
         && instance->m_inputMethods.size() > index
         && instance->m_inputMethods[index] == nullptr) {
         SGG::InputHandler *newHandler = &g_extraInputHandlers[index];
-        if (instance->m_inputMethods.size() > 1 && instance->m_inputMethods[1] != nullptr) {
-            std::memcpy(newHandler, instance->m_inputMethods[1], sizeof(SGG::InputHandler));
-        } else {
-            std::memset(newHandler, 0, sizeof(SGG::InputHandler));
-        }
+        std::memset(newHandler, 0, sizeof(SGG::InputHandler));
         instance->m_inputMethods[index] = newHandler;
     }
 
