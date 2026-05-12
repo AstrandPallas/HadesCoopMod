@@ -173,12 +173,44 @@ end
 -- Health bar
 -- --------------------------------------------------------------------------
 
+-- Diagnostic file writer (used by ShowHealthUI). io.open is gated to gameplay
+-- time elsewhere in the mod; appending here so we get a trace of what fires.
+local function ProbeWriteHUD(line)
+    local ok, f = pcall(io.open, "C:\\Users\\matte\\AppData\\Local\\Temp\\hades_p_hud.txt", "a")
+    if ok and f then
+        f:write(line .. "\n")
+        f:close()
+    end
+end
+
 function CoopPlayerUi:ShowHealthUI()
-    if not ConfigOptionCache.ShowUIAnimations then return end
-    if self.ScreenAnchors.HealthBack ~= nil then return end
+    ProbeWriteHUD(string.format(
+        "[Show] P%s corner=%s anims=%s alreadyShown=%s heroPresent=%s healthBarX=%s healthBarY=%s SW=%s SH=%s",
+        tostring(self.playerId),
+        tostring(self.corner or "?"),
+        tostring(ConfigOptionCache and ConfigOptionCache.ShowUIAnimations),
+        tostring(self.ScreenAnchors.HealthBack ~= nil),
+        tostring(CoopPlayers.GetHero(self.playerId) ~= nil),
+        tostring(self.position and self.position.healthBarX),
+        tostring(self.position and self.position.healthBarY),
+        tostring(ScreenWidth),
+        tostring(ScreenHeight)))
+
+    if not ConfigOptionCache.ShowUIAnimations then
+        ProbeWriteHUD("  -> early return: ConfigOptionCache.ShowUIAnimations falsy")
+        return
+    end
+    if self.ScreenAnchors.HealthBack ~= nil then
+        ProbeWriteHUD("  -> early return: HealthBack already exists")
+        return
+    end
 
     local hero = CoopPlayers.GetHero(self.playerId)
-    if hero == nil then return end
+    if hero == nil then
+        ProbeWriteHUD("  -> early return: hero is nil")
+        return
+    end
+    ProbeWriteHUD("  -> proceeding to create bar elements")
 
     local p = self.position
     local barX = p.healthBarX - (10 - CombatUI.FadeDistance.Health)
