@@ -100,7 +100,11 @@ function CoopPlayers.InitCoopPlayer()
     -- the coop menu (e.g. resumed a save directly from main menu, or the menu
     -- exited without writing TempRuntimeData) so 2-player behavior matches the
     -- original mod exactly.
-    local schema = GetTempRuntimeData("TN_Coop:control") or {}
+    -- GetTempRuntimeData can return `true`/`false` rather than nil for the
+    -- absent / multi-return cases, so `or {}` isn't enough — explicitly
+    -- type-check that we actually have the menu's controller list.
+    local schema = GetTempRuntimeData("TN_Coop:control")
+    if type(schema) ~= "table" then schema = {} end
     local requested = math.max(2, #schema)
 
     local createdAny = false
