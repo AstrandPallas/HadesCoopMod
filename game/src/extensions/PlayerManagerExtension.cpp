@@ -104,24 +104,20 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
         ResizeEastlPlayerVector<SGG::Player *>(resizePlayers, &instance->m_palyers, index + 1);
     }
 
-    // Grow m_inputMethods the same way, then placement-construct a real
-    // engine InputHandler in our static storage and point the slot at it.
-    // The engine's constructor initializes whatever lives in the pad_end[0x64]
-    // tail — that's what zero-init / memcpy got wrong and caused the crashes.
-    auto *resizeInputs = (void *)HookTable::Instance().Vector_InputHandler_Resize;
-    if (resizeInputs && instance->m_inputMethods.size() <= index) {
-        ResizeEastlPlayerVector<SGG::InputHandler *>(resizeInputs, &instance->m_inputMethods, index + 1);
-    }
-    if (index >= 2
-        && instance->m_inputMethods.size() > index
-        && instance->m_inputMethods[index] == nullptr) {
-        SGG::InputHandler *newHandler = &g_extraInputHandlers[index];
-        auto ctor = (void(__fastcall *)(void *))HookTable::Instance().InputHandler_Constructor;
-        if (ctor) {
-            ctor(newHandler);
-            instance->m_inputMethods[index] = newHandler;
-        }
-    }
+    // m_inputMethods is left at its original size and not modified. Three
+    // attempts to give slot >= 2 its own InputHandler all crashed mid room
+    // load with no Lua trace (engine-level death): memcpy from slot 1
+    // aliased opaque pad_end[0x64] state; zero-init left fields the engine
+    // dereferenced; placement-calling sgg::InputHandler::InputHandler
+    // (resolved through the symbol table) still crashed. Strong indication
+    // the engine has a separate input-pump registry that handlers must
+    // belong to — just sitting in m_inputMethods isn't enough — and we
+    // don't yet know the registration call.
+    //
+    // For now, every new slot uses controller index 1 (the existing engine-
+    // managed gamepad slot). P3 and P4 spawn and play, but they share P2's
+    // gamepad routing. Real per-slot input requires either finding the
+    // engine's input-method-add call or asking the Hades Modding Discord.
 
     if (instance->m_palyers.size() <= index)
         return nullptr;  // resize didn't take — bail rather than corrupt memory
@@ -129,11 +125,7 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
     if (instance->m_palyers[index] != nullptr)
         return nullptr;
 
-    // Each slot gets its own controller index — slot 0 keeps controller 0
-    // (vanilla keyboard), slot 1 keeps controller 1 (vanilla gamepad), and
-    // slots 2+ get fresh indices that point at our placement-constructed
-    // handlers, giving P3 and P4 independent gamepad routing.
-    uint8_t controller = static_cast<uint8_t>(index);
+    uint8_t controller = (index == 0) ? 0 : 1;
 
     auto player = instance->AddPlayer(index);
 
