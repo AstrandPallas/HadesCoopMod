@@ -119,7 +119,7 @@ function CoopPlayerUi.LayoutForCorner(corner)
             shadowFlipY = true,
             selfStoredAmmoBaseOffsetX = 10,
             selfStoredAmmoBaseOffsetY = 50,
-            healthTextOffsetX = 10,
+            healthTextOffsetX = 0,
         }
     elseif corner == "TR" then
         return {
@@ -169,7 +169,7 @@ function CoopPlayerUi.LayoutForCorner(corner)
             shadowFlipY = false,
             selfStoredAmmoBaseOffsetX = 10,
             selfStoredAmmoBaseOffsetY = -50,
-            healthTextOffsetX = 10,
+            healthTextOffsetX = 0,
         }
     end
 end
