@@ -100,11 +100,14 @@ function CoopPlayers.InitCoopPlayer()
     -- the coop menu (e.g. resumed a save directly from main menu, or the menu
     -- exited without writing TempRuntimeData) so 2-player behavior matches the
     -- original mod exactly.
-    -- GetTempRuntimeData can return `true`/`false` rather than nil for the
-    -- absent / multi-return cases, so `or {}` isn't enough — explicitly
-    -- type-check that we actually have the menu's controller list.
-    local schema = GetTempRuntimeData("TN_Coop:control")
-    if type(schema) ~= "table" then schema = {} end
+    -- GetTempRuntimeData returns (success, data) as MULTIPLE values; a single
+    -- `local x = ...` would only capture `success` (true/false) and miss the
+    -- table. The vanilla `eat_true(GetTempRuntimeData(...))` pattern exists
+    -- to forward the second return, but it asserts on missing data which
+    -- crashes when the user didn't go through the coop menu. Capture both
+    -- explicitly and fall back to {} for the missing / non-table cases.
+    local ok, data = GetTempRuntimeData("TN_Coop:control")
+    local schema = (ok and type(data) == "table") and data or {}
     local requested = math.max(2, #schema)
 
     local createdAny = false
