@@ -22,8 +22,14 @@ CoopCamera.IgnoreHeroes = {}
 -- Dynamic-zoom tunables: distance is in game units (same units GetDistance returns).
 -- Close-zoom target is the room's vanilla ZoomFraction (stashed in CreateRoomWrapHook).
 CoopCamera.CloseDistance       = 400   -- at/below this → close-zoom target
-CoopCamera.FarDistance         = 1200  -- at/above this → co-op wide zoom
+CoopCamera.FarDistance         = 1200  -- at/above this → co-op wide zoom (with 2 players)
 CoopCamera.CloseZoomScale      = 0.9   -- close-zoom = vanilla * this (slightly wider than vanilla)
+-- With more players the cluster spreads naturally — a 3- or 4-player party often
+-- crosses the 2-player FarDistance just standing around. Grow both thresholds by
+-- this amount per extra player so the zoom curve still has headroom before maxing
+-- out at the wide end.
+CoopCamera.FarDistancePerPlayer   = 250
+CoopCamera.CloseDistancePerPlayer = 100
 -- Lerp duration must stay much LONGER than update interval, so each FocusCamera
 -- call lands while the previous ease is still in flight. That's how we get a
 -- continuous low-pass-filter feel instead of step-and-stop jerks.
@@ -131,7 +137,13 @@ function CoopCamera.UpdateDynamicZoom(units)
     else
         local closeZoom = (room.CoopVanillaZoomFraction or 1.0) * CoopCamera.CloseZoomScale
         local wideZoom  = room.ZoomFraction
-        desiredZoom = CoopCamera.ComputeZoomFraction(dist, closeZoom, wideZoom)
+        -- Scale the close/far thresholds with the number of alive players so a
+        -- 3- or 4-player party — which sits further apart at rest than a pair —
+        -- doesn't max out the zoom curve just by existing in formation.
+        local extraPlayers = math.max(0, #units - 2)
+        local closeDist = CoopCamera.CloseDistance + extraPlayers * CoopCamera.CloseDistancePerPlayer
+        local farDist   = CoopCamera.FarDistance   + extraPlayers * CoopCamera.FarDistancePerPlayer
+        desiredZoom = CoopCamera.ComputeZoomFraction(dist, closeZoom, wideZoom, closeDist, farDist)
     end
 
     local now = _worldTime or 0
@@ -148,18 +160,23 @@ end
 
 ---@private
 -- Smoothstep-lerp the camera zoom between vanilla single-player feel (when players
--- cluster) and the co-op wide view (when players spread out).
+-- cluster) and the co-op wide view (when players spread out). Close/far thresholds
+-- are passed in so the caller can scale them with the active player count.
 ---@param distance number  distance between the two furthest-apart alive players
 ---@param closeZoom number  zoom when players are close (room's vanilla ZoomFraction)
 ---@param wideZoom number   zoom when players are far (room's co-op ZoomFraction)
+---@param closeDistance? number  optional override for CoopCamera.CloseDistance
+---@param farDistance? number    optional override for CoopCamera.FarDistance
 ---@return number
-function CoopCamera.ComputeZoomFraction(distance, closeZoom, wideZoom)
-    if distance <= CoopCamera.CloseDistance then
+function CoopCamera.ComputeZoomFraction(distance, closeZoom, wideZoom, closeDistance, farDistance)
+    closeDistance = closeDistance or CoopCamera.CloseDistance
+    farDistance   = farDistance   or CoopCamera.FarDistance
+    if distance <= closeDistance then
         return closeZoom
-    elseif distance >= CoopCamera.FarDistance then
+    elseif distance >= farDistance then
         return wideZoom
     end
-    local t = (distance - CoopCamera.CloseDistance) / (CoopCamera.FarDistance - CoopCamera.CloseDistance)
+    local t = (distance - closeDistance) / (farDistance - closeDistance)
     local s = t * t * (3 - 2 * t)
     return closeZoom + (wideZoom - closeZoom) * s
 end

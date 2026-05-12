@@ -101,7 +101,24 @@ OnAnyLoad {
                 for playerId = 2, CoopPlayers.GetPlayersCount() do
                     CoopPlayers.InitCoopUnit(playerId)
                     if playerId >= 3 and not CoopPlayerUi.Get(playerId) then
-                        CoopPlayerUi.Create(playerId, CoopPlayerUi.LayoutForCorner(cornerForSlot[playerId]))
+                        local ui = CoopPlayerUi.Create(playerId, CoopPlayerUi.LayoutForCorner(cornerForSlot[playerId]))
+                        -- Vanilla ShowHealthUI / ShowAmmoUI / ShowSuperMeter
+                        -- fire once early in the run, before this instance
+                        -- exists, so the UIHooks dispatchers miss P3+. Show
+                        -- them now explicitly, under the slot's hero context
+                        -- so trait lookups inside the Show* methods resolve
+                        -- against the right hero.
+                        local hero = CoopPlayers.GetHero(playerId)
+                        if hero then
+                            HeroContext.RunWithHeroContext(hero, function()
+                                ui:ShowHealthUI()
+                                ui:ShowAmmoUI()
+                                ui:ShowSuperMeter()
+                                if hero.Weapons and hero.Weapons.GunWeapon then
+                                    ui:ShowGunUI()
+                                end
+                            end)
+                        end
                     end
                 end
                 CoopPlayerUi.RefreshAll()
