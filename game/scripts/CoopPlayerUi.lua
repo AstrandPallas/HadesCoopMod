@@ -40,6 +40,7 @@ CoopPlayerUi.__index = CoopPlayerUi
 ---@field shadowFlipY boolean
 ---@field selfStoredAmmoBaseOffsetX number
 ---@field selfStoredAmmoBaseOffsetY number
+---@field healthTextOffsetX number   X offset for the "current/max" health text relative to the bar anchor
 
 ---@type table<number, CoopPlayerUi>
 CoopPlayerUi.Instances = {}
@@ -93,6 +94,7 @@ function CoopPlayerUi.LayoutForCorner(corner)
             shadowFlipY = false,
             selfStoredAmmoBaseOffsetX = 600 + 380,
             selfStoredAmmoBaseOffsetY = -50,
+            healthTextOffsetX = -90,
         }
     elseif corner == "TL" then
         return {
@@ -117,6 +119,7 @@ function CoopPlayerUi.LayoutForCorner(corner)
             shadowFlipY = true,
             selfStoredAmmoBaseOffsetX = 10,
             selfStoredAmmoBaseOffsetY = 50,
+            healthTextOffsetX = 10,
         }
     elseif corner == "TR" then
         return {
@@ -141,6 +144,7 @@ function CoopPlayerUi.LayoutForCorner(corner)
             shadowFlipY = true,
             selfStoredAmmoBaseOffsetX = 600 + 380,
             selfStoredAmmoBaseOffsetY = 50,
+            healthTextOffsetX = -90,
         }
     else -- "BL"
         return {
@@ -165,6 +169,7 @@ function CoopPlayerUi.LayoutForCorner(corner)
             shadowFlipY = false,
             selfStoredAmmoBaseOffsetX = 10,
             selfStoredAmmoBaseOffsetY = -50,
+            healthTextOffsetX = 10,
         }
     end
 end
@@ -210,7 +215,7 @@ function CoopPlayerUi:ShowHealthUI()
 
     CreateTextBox(MergeTables({
         Id = self.ScreenAnchors.HealthBack,
-        OffsetX = -90, OffsetY = -13,
+        OffsetX = p.healthTextOffsetX, OffsetY = -13,
         Font = "AlegreyaSansSCBold", FontSize = 24,
         ShadowRed = 0.1, ShadowBlue = 0.1, ShadowGreen = 0.1,
         OutlineColor = { 0.113, 0.113, 0.113, 1 }, OutlineThickness = 1,
