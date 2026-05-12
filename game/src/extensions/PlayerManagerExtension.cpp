@@ -7,8 +7,6 @@
 #include "../interface/PlayerManager.h"
 #include "../HookTable.h"
 
-#include <cstring>
-
 // EASTL vector::resize(size_type n, const value_type& value).
 // __fastcall on x64 Windows: rcx=this, rdx=n, r8=&value.
 // We pass a pointer-to-nullptr as the fill value.
@@ -18,15 +16,6 @@ static void ResizeEastlPlayerVector(void *resizeFnPtr, void *vec, size_t newSize
     auto fn = (void(__fastcall *)(void *, size_t, T const *))resizeFnPtr;
     fn(vec, newSize, &fillValue);
 }
-
-// Static storage for the input handlers we synthesize for slots beyond what
-// Hades pre-creates (the engine builds 2 entries in m_inputMethods at startup;
-// we provide our own for slots 2+ = P3+). These live for process lifetime and
-// are never freed — m_inputMethods only stores pointers, so the engine's own
-// destructors won't try to delete our static storage. Initialized by copying
-// the existing gamepad handler (m_inputMethods[1]) so internal engine state
-// (deadzone, repeat-delay, direction caches, etc.) is consistent.
-static SGG::InputHandler g_extraInputHandlers[MAX_PLAYERS];
 
 bool PlayerManagerExtension::AssignGamepad(size_t playerIndex, uint8_t gamepadIndex) {
     if (GetPlayersCount() < playerIndex + 1)
@@ -104,20 +93,22 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
         ResizeEastlPlayerVector<SGG::Player *>(resizePlayers, &instance->m_palyers, index + 1);
     }
 
-    // m_inputMethods is left at its original size and not modified. Three
-    // attempts to give slot >= 2 its own InputHandler all crashed mid room
-    // load with no Lua trace (engine-level death): memcpy from slot 1
-    // aliased opaque pad_end[0x64] state; zero-init left fields the engine
-    // dereferenced; placement-calling sgg::InputHandler::InputHandler
-    // (resolved through the symbol table) still crashed. Strong indication
-    // the engine has a separate input-pump registry that handlers must
-    // belong to — just sitting in m_inputMethods isn't enough — and we
-    // don't yet know the registration call.
-    //
-    // For now, every new slot uses controller index 1 (the existing engine-
-    // managed gamepad slot). P3 and P4 spawn and play, but they share P2's
-    // gamepad routing. Real per-slot input requires either finding the
-    // engine's input-method-add call or asking the Hades Modding Discord.
+    // Grow m_inputMethods with nullptr entries. We deliberately do NOT
+    // populate mInputs[index] ourselves: per Ghidra decompilation of
+    // sgg::PlayerManager::AssignController, when the slot at the requested
+    // controller index is null the engine *itself* runs
+    //   _aligned_malloc(0x88, 8)
+    //   sgg::InputHandler::InputHandler(handler, EControllerIndex::<param>)
+    //   mInputs[index] = handler
+    //   sgg::InputHandler::HandleInput(handler, ...)
+    // which is exactly the proper init path. Earlier attempts to placement-
+    // construct our own handler crashed because AssignController saw mInputs
+    // [index] non-null and skipped that initialization branch. Leaving the
+    // slot null lets the engine take its native path.
+    auto *resizeInputs = (void *)HookTable::Instance().Vector_InputHandler_Resize;
+    if (resizeInputs && instance->m_inputMethods.size() <= index) {
+        ResizeEastlPlayerVector<SGG::InputHandler *>(resizeInputs, &instance->m_inputMethods, index + 1);
+    }
 
     if (instance->m_palyers.size() <= index)
         return nullptr;  // resize didn't take — bail rather than corrupt memory
@@ -125,7 +116,9 @@ SGG::Player *PlayerManagerExtension::CreatePlayer(size_t index) {
     if (instance->m_palyers[index] != nullptr)
         return nullptr;
 
-    uint8_t controller = (index == 0) ? 0 : 1;
+    // Each slot gets its own controller index now that the engine will
+    // allocate a fresh InputHandler for it through AssignController.
+    uint8_t controller = static_cast<uint8_t>(index);
 
     auto player = instance->AddPlayer(index);
 
