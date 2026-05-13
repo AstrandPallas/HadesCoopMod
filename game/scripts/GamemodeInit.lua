@@ -37,6 +37,8 @@ local ResourceLoadingHooks = ModRequire "hooks/ResourceLoadingHooks.lua"
 local TroveHooks = ModRequire "hooks/TroveHooks.lua"
 ---@type FoodHooks
 local FoodHooks = ModRequire "hooks/FoodHooks.lua"
+---@type NPCRewardHooks
+local NPCRewardHooks = ModRequire "hooks/NPCRewardHooks.lua"
 ---@type ILootDelivery
 local LootDelivery = ModRequire "loot/LootInterface.lua"
 
@@ -67,6 +69,7 @@ local function TryInstalBasicHooks()
     UIHooks.InitHooks()
     CoopPlayers.CoopInit()
     LootHooks.InitHooks()
+    NPCRewardHooks.InitHooks()
     VulnerabilityHooks.InitHooks()
     ResourceLoadingHooks.InitHooks()
     TroveHooks.InitHooks()
