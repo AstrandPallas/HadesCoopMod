@@ -4,3 +4,4 @@ build
 build_msvc
 out
 CMakeLists.txt.*
+docs/superpowers/
