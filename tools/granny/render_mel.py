@@ -112,29 +112,50 @@ def _find_armatures(bpy):
     return [o for o in bpy.context.scene.objects if o.type == 'ARMATURE']
 
 
-def _transfer_action_to(target_armature, source_armature):
-    """Move the action from source_armature to target_armature so it animates
-    the imported mesh. Then delete the source armature (it's redundant).
+def _reparent_mesh_to(target_armature, source_armature):
+    """Move all mesh children of source_armature to target_armature, and
+    rewire any Armature modifiers on them to point at target_armature.
 
-    Returns the action name on success (the source armature reference is
-    invalid after this call returns), or None if there was no action to
-    transfer."""
+    Why this instead of transferring the action: Blender 5.0 restructured
+    Action data with layers + slots, where each slot is bound to a specific
+    data ID (the armature it was loaded against). Reassigning
+    `animation_data.action` doesn't rebind the slot to the new armature,
+    so f-curves don't drive bones. Reparenting the mesh to the armature
+    that already owns the action sidesteps the slot-rebinding problem
+    entirely — the mesh's vertex groups resolve against the new armature
+    by bone name (already verified ~97% overlap for Melinoe).
+
+    Returns the action name on success, or None if the source had no action.
+    """
     import bpy
-    if source_armature.animation_data is None or source_armature.animation_data.action is None:
-        return None
-    action = source_armature.animation_data.action
-    action_name = action.name
+
+    # Collect mesh objects parented to source_armature.
+    mesh_children = [
+        obj for obj in list(source_armature.children) if obj.type == 'MESH'
+    ]
+
+    # Re-parent each, preserve world transforms.
+    for mesh_obj in mesh_children:
+        mat = mesh_obj.matrix_world.copy()
+        mesh_obj.parent = target_armature
+        mesh_obj.matrix_world = mat
+        # Rewire armature modifiers (vertex groups still resolve by name).
+        for mod in mesh_obj.modifiers:
+            if mod.type == 'ARMATURE':
+                mod.object = target_armature
+
+    # The action lives on target_armature (the animation glb's armature),
+    # not source_armature (mesh glb has no action). Capture the name from
+    # the right side.
+    action_name = None
+    if target_armature.animation_data and target_armature.animation_data.action:
+        action_name = target_armature.animation_data.action.name
+
+    # Delete the source armature (now orphaned).
     source_name = source_armature.name
-    if target_armature.animation_data is None:
-        target_armature.animation_data_create()
-    target_armature.animation_data.action = action
-    # Delete the now-redundant source armature and its children. After
-    # this point, callers must NOT touch `source_armature` (its StructRNA
-    # is freed).
-    for child in list(source_armature.children):
-        bpy.data.objects.remove(child, do_unlink=True)
     bpy.data.objects.remove(source_armature, do_unlink=True)
-    return action_name, source_name
+
+    return action_name, source_name, len(mesh_children)
 
 
 def _disable_noisy_addons():
@@ -252,13 +273,17 @@ def main():
     new_armatures = [a for a in all_armatures if a is not mesh_armature]
     if new_armatures:
         anim_armature = new_armatures[-1]
-        anim_armature_name = anim_armature.name  # capture before _transfer_action_to deletes it
-        result = _transfer_action_to(mesh_armature, anim_armature)
-        if result is not None:
-            action_name, source_name = result
-            print(f"  transferred action {action_name!r} from {source_name} -> {mesh_armature.name}")
-        else:
-            print(f"  warning: animation armature {anim_armature_name} had no action")
+        anim_armature_name = anim_armature.name
+        # Move the mesh to the animation's armature (instead of moving the
+        # action onto the mesh's armature) so we don't have to rebind the
+        # action's slot to a new data ID. After this, mesh_armature is
+        # gone and anim_armature is the one we render against.
+        action_name, mesh_arm_name, num_meshes = _reparent_mesh_to(anim_armature, mesh_armature)
+        print(f"  reparented {num_meshes} mesh(es) from {mesh_arm_name} -> {anim_armature_name}")
+        print(f"  active action on anim armature: {action_name}")
+        # The render code below references `mesh_armature` to fetch the
+        # active action's frame range. Point that at anim_armature now.
+        mesh_armature = anim_armature
     else:
         # No new armature created — the importer might have merged the
         # action onto the existing armature already, or this glb has no
