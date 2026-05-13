@@ -170,6 +170,46 @@ def main():
 
     print(f"Loading mesh: {args.mesh}")
     _import_glb(args.mesh)
+
+    # Hide outline shell meshes. Hades characters have a Maya cel-shading
+    # rig where a slightly-enlarged duplicate of the body mesh, with
+    # flipped normals + solid-black material, gets rendered first to draw
+    # the cartoon outline. The glTF import strips that special material
+    # treatment but keeps the geometry, so the outline shell ends up as a
+    # solid black layer that occludes everything from camera POV. Names
+    # like Melinoe_Rig_MelinoeOutline_MeshShape are the signal. Hiding
+    # them gives us the actual body to look at; recreating the outline
+    # effect properly is a separate styling pass.
+    for obj in list(bpy.context.scene.objects):
+        if obj.type == 'MESH' and 'Outline' in obj.name:
+            print(f"  hiding outline shell: {obj.name}")
+            obj.hide_render = True
+            obj.hide_viewport = True
+
+    # Also remove any leftover default objects (the factory-empty preset
+    # sometimes leaves an Icosphere or Cube placeholder).
+    for placeholder in ("Cube", "Icosphere", "Sphere"):
+        obj = bpy.data.objects.get(placeholder)
+        if obj is not None:
+            bpy.data.objects.remove(obj, do_unlink=True)
+
+    # lslib's glTF export drops texture references (Granny stores them as
+    # artist-machine paths like X:/Raw/3D/... which never resolve), so
+    # imported materials have only a "Dummy" white Base Color and render
+    # without surface variation. Patch all materials with a tunable gray
+    # so EEVEE has something to shade. Real textures live in BiomeHub.pkg's
+    # GR2\Melinoe_Color etc. and would need a separate extraction pass.
+    for mat in bpy.data.materials:
+        if not mat.use_nodes:
+            continue
+        bsdf = mat.node_tree.nodes.get("Principled BSDF")
+        if bsdf is None:
+            continue
+        bsdf.inputs["Base Color"].default_value = (0.7, 0.7, 0.7, 1.0)
+        if "Roughness" in bsdf.inputs:
+            bsdf.inputs["Roughness"].default_value = 0.6
+        if "Metallic" in bsdf.inputs:
+            bsdf.inputs["Metallic"].default_value = 0.0
     mesh_armatures = _find_armatures(bpy)
     if not mesh_armatures:
         print(f"ERROR: no armature in mesh glb {args.mesh}", file=sys.stderr)
