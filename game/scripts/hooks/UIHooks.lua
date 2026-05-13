@@ -495,6 +495,55 @@ function UIHooks.InitHooks()
         end
     end
 
+    -- Patch vanilla TraitUIActivateTraits to add a nil-check on the
+    -- FastClearSpeedBonus branch. Vanilla UIScripts.lua line 1535-1536
+    -- calls GetExistingUITrait and immediately dereferences the result
+    -- (.TraitActiveOverlay) without checking for nil. In single-player
+    -- this never fires because every trait has an AnchorId in the UI by
+    -- the time TraitUIActivateTraits runs. In co-op, ChangeHeroInTraitsMenu
+    -- can switch CurrentRun.Hero between players and call
+    -- TraitUIActivateTraits while a trait's UI components haven't been
+    -- fully recreated yet, so GetExistingUITrait returns nil -> crash.
+    --
+    -- Body is verbatim vanilla UIScripts.lua:TraitUIActivateTraits with
+    -- ONLY the line-1536 SetAnimation call wrapped in a nil check.
+    TraitUIActivateTraits = function()
+        if not CurrentRun or not CurrentRun.Hero then
+            return
+        end
+
+        for i, traitData in pairs(CurrentRun.Hero.Traits) do
+            local thresholdData = traitData.LowHealthThresholdText
+            if thresholdData ~= nil and (CurrentRun.Hero.Health / CurrentRun.Hero.MaxHealth) < thresholdData.Threshold then
+                TraitUIActivateTrait(traitData)
+            end
+            if not CurrentRun.CurrentRoom.BlockClearRewards then
+                local currentRoom = CurrentRun.CurrentRoom
+                local perfectClearDamageData = traitData.PerfectClearDamageBonus
+                if not CurrentRun.Hero.IsDead and perfectClearDamageData ~= nil then
+                    if currentRoom and currentRoom.Encounter ~= nil and currentRoom.Encounter.EncounterType ~= "NonCombat" and not currentRoom.Encounter.Completed and not currentRoom.Encounter.PlayerTookDamage then
+                        TraitUIActivateTrait(traitData)
+                    end
+                end
+                local fastClearData = traitData.FastClearSpeedBonus
+                if fastClearData ~= nil then
+                    if not CurrentRun.Hero.IsDead and currentRoom and currentRoom.Encounter ~= nil and currentRoom.Encounter.StartTime and currentRoom.Encounter.EncounterType ~= "NonCombat" and not currentRoom.Encounter.Completed then
+                        local currentEncounter = currentRoom.Encounter
+                        local elapsedTime = _worldTime - currentEncounter.StartTime
+                        local clearTimeThreshold = currentEncounter.FastClearThreshold or traitData.FastClearThreshold
+                        TraitUIActivateTrait(traitData, { CustomAnimation = "ActiveTraitSingle", PlaySpeed = 30 / clearTimeThreshold })
+                        local existingTraitData = GetExistingUITrait(traitData)
+                        -- Vanilla derefs this unconditionally; nil-check
+                        -- is the whole point of this override.
+                        if existingTraitData ~= nil and existingTraitData.TraitActiveOverlay ~= nil then
+                            SetAnimation({ Name = "ActiveTraitSingle", StartFrameFraction = 1 - elapsedTime / clearTimeThreshold, DestinationId = existingTraitData.TraitActiveOverlay })
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     -- Traits
     HookUtils.onPreFunction("ShowAdvancedTooltip", CombinedTraitsUI.ChangeHeroInTraitsMenu)
     HookUtils.onPreFunction("TraitUIActivateTrait", CombinedTraitsUI.ChangeHeroInTraitsMenu)
