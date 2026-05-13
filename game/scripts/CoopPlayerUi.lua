@@ -229,19 +229,25 @@ function CoopPlayerUi.LayoutForBottomSlot(slotIndex, totalSlots)
         -- to anchor against.
         lifePipBaseX = isRightmost and (barX + 340) or (barX + 242),
         lifePipY = ScreenHeight - 95,
-        -- Bloodstone (cast/ammo) icon + count sit on the row ABOVE the bar at
-        -- the same Y as the life-pip row, positioned to the LEFT of the
-        -- leftmost pip (~40px gap with the worst-case 5-pip cluster). This
-        -- groups the cast indicator next to the death-defiance pips above
-        -- the bar rather than alongside the bar at its mid-height.
-        --
-        -- 192 = 5 pips × 32 (max leftward growth) + 32 (gap to icon)
-        ammoIndicatorX = (isRightmost and (barX + 340) or (barX + 242)) - 192,
-        ammoIndicatorY = ScreenHeight - 95,
-        -- Reload timer keeps the same relative offset from the ammo indicator
-        -- it used to have (+18, -8), so it docks just above-right of the icon.
-        ammoReloadX = (isRightmost and (barX + 340) or (barX + 242)) - 174,
-        ammoReloadY = ScreenHeight - 103,
+        -- Bloodstone (cast/ammo) icon + count sit just LEFT of the pip
+        -- cluster on the row above the bar. -178 puts the icon ~50px from
+        -- the leftmost pip in the 3-pip default case (the vanilla maximum
+        -- with full Death Defiance mirror upgrades), accounting for the
+        -- ~64px-wide icon+text cluster:
+        --   leftmost pip = lifePipBaseX - 64  (for 3 pips growing left)
+        --   cluster right edge = ammoIndicatorX + 64
+        --   target gap edge-to-edge ≈ 50
+        --   ammoIndicatorX = lifePipBaseX - 64 - 50 - 64 = lifePipBaseX - 178
+        -- Y is lifted 10px above the pip row to compensate for the icon
+        -- art's lower-anchored baseline; this visually aligns its center
+        -- with the centered pip skulls.
+        ammoIndicatorX = (isRightmost and (barX + 340) or (barX + 242)) - 178,
+        ammoIndicatorY = ScreenHeight - 105,
+        -- Reload timer keeps the same relative offset from the ammo
+        -- indicator it used to have (+18, -8): docks just above-right of
+        -- the bloodstone icon.
+        ammoReloadX = (isRightmost and (barX + 340) or (barX + 242)) - 160,
+        ammoReloadY = ScreenHeight - 113,
         ammoReloadMultiYOffset = 35,
         ammoReloadFinishTargetYOffset = 40,
         superMeterX = barX + 20,

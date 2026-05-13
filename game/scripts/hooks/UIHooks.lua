@@ -92,23 +92,83 @@ end
 
 function UIHooks.InitHooks()
     -- Health
-    UIHooks.SimpleHookWithVisibilityCheck("ShowHealthUI")
+    -- Replace vanilla ShowHealthUI to center the "Current/Max" text on the
+    -- bar instead of vanilla's right-anchored Left-justified placement
+    -- (OffsetX=374, Justification="Left"). ModifyTextBox doesn't support
+    -- updating OffsetX/Justification after CreateTextBox — those are set
+    -- only at creation — so the post-hook approach that tried to recenter
+    -- after the fact silently no-op'd. This pre-empts vanilla so the
+    -- desired params are baked in from the first CreateTextBox call.
+    --
+    -- Body is verbatim UIScripts.lua:ShowHealthUI with two changes:
+    --   - the CreateTextBox call uses OffsetX=210, Justification="Center"
+    --   - everything else is identical, including the BadgeId/StoredAmmo
+    --     setup and FadeObstacleIn dispatch, so vanilla-equivalent visuals.
+    -- If vanilla updates this function in a future Hades patch, the
+    -- override needs the same diff.
+    ShowHealthUI = function()
+        if not ConfigOptionCache.ShowUIAnimations then return end
+        if ScreenAnchors.HealthBack ~= nil then return end
 
-    -- Recenter P1's vanilla "Current/Max" health text on the bar so it
-    -- matches the centered text on P2-P4's CoopPlayerUi bars. The vanilla
-    -- ShowHealthUI creates the TextBox attached to ScreenAnchors.HealthBack
-    -- (P1's global anchor); ModifyTextBox just repositions it post-creation.
-    -- 210 is half the ~420px bar texture width — see the equivalent comment
-    -- in CoopPlayerUi:ShowHealthUI.
-    HookUtils.onPostFunction("ShowHealthUI", function()
-        if ScreenAnchors and ScreenAnchors.HealthBack then
-            ModifyTextBox {
-                Id = ScreenAnchors.HealthBack,
-                OffsetX = 210,
-                Justification = "Center",
-            }
+        if ScreenAnchors.Shadow == nil then
+            ScreenAnchors.Shadow = CreateScreenObstacle({ Name = "BlankObstacle", Group = "Combat_UI_Backing", X = 0, Y = ScreenHeight })
+            SetAnimation({ Name = "BarShadow", DestinationId = ScreenAnchors.Shadow })
         end
-    end)
+
+        ScreenAnchors.HealthBack  = CreateScreenObstacle({ Name = "BlankObstacle", Group = "Combat_UI", X = 10 - CombatUI.FadeDistance.Health, Y = ScreenHeight - 50 })
+        ScreenAnchors.HealthRally = CreateScreenObstacle({ Name = "BlankObstacle", Group = "Combat_UI", X = 10 - CombatUI.FadeDistance.Health, Y = ScreenHeight - 50 })
+        ScreenAnchors.HealthFill  = CreateScreenObstacle({ Name = "BlankObstacle", Group = "Combat_UI", X = 10 - CombatUI.FadeDistance.Health, Y = ScreenHeight - 50 })
+        ScreenAnchors.HealthFlash = CreateScreenObstacle({ Name = "BlankObstacle", Group = "Combat_UI", X = 10 - CombatUI.FadeDistance.Health, Y = ScreenHeight - 50 })
+        ScreenAnchors.StoredAmmo     = ScreenAnchors.StoredAmmo     or {}
+        ScreenAnchors.SelfStoredAmmo = ScreenAnchors.SelfStoredAmmo or {}
+
+        if GameState.BadgeRank ~= nil then
+            local badgeData = GameData.BadgeData[GameData.BadgeOrderData[GameState.BadgeRank]]
+            ScreenAnchors.BadgeId = CreateScreenObstacle({ Name = "BlankObstacle", Group = "Combat_UI", X = 44, Y = ScreenHeight - 60, Scale = 0.5 })
+            SetAnimation({ Name = badgeData.Icon, DestinationId = ScreenAnchors.BadgeId })
+        end
+
+        RecreateLifePips()
+
+        CreateTextBox(MergeTables({
+            Id = ScreenAnchors.HealthBack,
+            OffsetX = 210, OffsetY = -13,
+            Font = "AlegreyaSansSCBold", FontSize = 24,
+            ShadowRed = 0.1, ShadowBlue = 0.1, ShadowGreen = 0.1,
+            OutlineColor = { 0.113, 0.113, 0.113, 1 }, OutlineThickness = 1,
+            ShadowAlpha = 1.0, ShadowBlur = 0, ShadowOffsetY = 2, ShadowOffsetX = 0,
+            Justification = "Center",
+        }, LocalizationData.UIScripts.HealthUI))
+
+        SetAnimation({ Name = "HealthBar", DestinationId = ScreenAnchors.HealthBack })
+
+        local frameTarget = 1 - (CurrentRun.Hero.Health / CurrentRun.Hero.MaxHealth)
+        SetAnimation({ Name = "HealthBarFill",      DestinationId = ScreenAnchors.HealthFill,  FrameTarget = frameTarget, Instant = true, Color = Color.Black })
+        SetAnimation({ Name = "HealthBarFillWhite", DestinationId = ScreenAnchors.HealthRally, FrameTarget = frameTarget, Instant = true, Color = Color.RallyHealth })
+
+        thread(UpdateHealthUI)
+
+        if CurrentRun.CurrentRoom.LoadedAmmo then
+            for i = 1, CurrentRun.CurrentRoom.LoadedAmmo do
+                local offsetX = 380 + (#ScreenAnchors.SelfStoredAmmo * 22)
+                local offsetY = -50
+                local screenId = CreateScreenObstacle({ Name = "BlankObstacle", Group = "Combat_UI", DestinationId = ScreenAnchors.HealthBack, X = 10 + offsetX, Y = ScreenHeight - 50 + offsetY })
+                SetThingProperty({ Property = "SortMode", Value = "Id", DestinationId = screenId })
+                table.insert(ScreenAnchors.SelfStoredAmmo, screenId)
+                SetAnimation({ Name = "AmmoEmbeddedInEnemyIcon", DestinationId = screenId })
+            end
+        end
+
+        FadeObstacleIn({ Id = ScreenAnchors.HealthBack,  Duration = CombatUI.FadeInDuration, IncludeText = true,  Distance = CombatUI.FadeDistance.Health, Direction = 0 })
+        FadeObstacleIn({ Id = ScreenAnchors.HealthRally, Duration = CombatUI.FadeInDuration, IncludeText = false, Distance = CombatUI.FadeDistance.Health, Direction = 0 })
+        FadeObstacleIn({ Id = ScreenAnchors.HealthFill,  Duration = CombatUI.FadeInDuration, IncludeText = false, Distance = CombatUI.FadeDistance.Health, Direction = 0 })
+        FadeObstacleIn({ Id = ScreenAnchors.HealthFlash, Duration = CombatUI.FadeInDuration, IncludeText = false, Distance = CombatUI.FadeDistance.Health, Direction = 0 })
+        if ScreenAnchors.BadgeId ~= nil then
+            FadeObstacleIn({ Id = ScreenAnchors.BadgeId, Duration = CombatUI.FadeInDuration, IncludeText = false, Distance = CombatUI.FadeDistance.Health, Direction = 0 })
+        end
+    end
+
+    UIHooks.SimpleHookWithVisibilityCheck("ShowHealthUI")
 
     UIHooks.CreateSimpleHook("UpdateHealthUI")
     HookUtils.onPostFunction("DestroyHealthUI", function()
@@ -200,14 +260,15 @@ function UIHooks.InitHooks()
         if not ConfigOptionCache.ShowUIAnimations then return end
         if ScreenAnchors.AmmoIndicatorUI ~= nil then return end
 
-        -- X=260 sits ~30px past the rightmost lifepip in the 5-pip max case
-        -- (P1's pips grow rightward from X=102; 5 pips end at X=230).
-        -- Y matches the lifepip row (lifePipY = ScreenHeight - 95) so the
-        -- bloodstone reads as part of the same row as the death-defiance
-        -- pips rather than sitting alongside the bar at mid-height.
+        -- X=216 puts the icon ~50px past the rightmost lifepip in the
+        -- 3-pip default case (P1 pips grow rightward from X=102; 3 pips
+        -- end at X=166). Vanilla maxes out at 3 Last Stands with all
+        -- Death Defiance Mirror upgrades, so this gap stays consistent.
+        -- Y is lifted 10px above the pip row to compensate for the icon
+        -- art's lower-anchored baseline (matches CoopPlayerUi's offset).
         ScreenAnchors.AmmoIndicatorUI = CreateScreenObstacle({
             Name = "BlankObstacle", Group = "Combat_UI",
-            X = 260, Y = ScreenHeight - 95,
+            X = 216, Y = ScreenHeight - 105,
         })
         SetAnimation({ Name = "AmmoIndicatorIcon", DestinationId = ScreenAnchors.AmmoIndicatorUI })
         CreateTextBox(MergeTables({
