@@ -94,6 +94,22 @@ function UIHooks.InitHooks()
     -- Health
     UIHooks.SimpleHookWithVisibilityCheck("ShowHealthUI")
 
+    -- Recenter P1's vanilla "Current/Max" health text on the bar so it
+    -- matches the centered text on P2-P4's CoopPlayerUi bars. The vanilla
+    -- ShowHealthUI creates the TextBox attached to ScreenAnchors.HealthBack
+    -- (P1's global anchor); ModifyTextBox just repositions it post-creation.
+    -- 210 is half the ~420px bar texture width — see the equivalent comment
+    -- in CoopPlayerUi:ShowHealthUI.
+    HookUtils.onPostFunction("ShowHealthUI", function()
+        if ScreenAnchors and ScreenAnchors.HealthBack then
+            ModifyTextBox {
+                Id = ScreenAnchors.HealthBack,
+                OffsetX = 210,
+                Justification = "Center",
+            }
+        end
+    end)
+
     UIHooks.CreateSimpleHook("UpdateHealthUI")
     HookUtils.onPostFunction("DestroyHealthUI", function()
         SecondPlayerUi.DestroyHealthUI()

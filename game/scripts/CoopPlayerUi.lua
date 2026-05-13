@@ -302,14 +302,20 @@ function CoopPlayerUi:ShowHealthUI()
 
     self:RecreateLifePips()
 
+    -- The HealthBar texture is ~420px wide anchored at the obstacle's X
+    -- (left edge of the visible bar). Center the "Current/Max" text on
+    -- the bar's visual midpoint so it reads inside the bar regardless of
+    -- slot. healthTextOffsetX in the layout config is no longer used here
+    -- but kept on the struct for backwards-compat with anything that
+    -- introspects the position.
     CreateTextBox(MergeTables({
         Id = self.ScreenAnchors.HealthBack,
-        OffsetX = p.healthTextOffsetX, OffsetY = -13,
+        OffsetX = 210, OffsetY = -13,
         Font = "AlegreyaSansSCBold", FontSize = 24,
         ShadowRed = 0.1, ShadowBlue = 0.1, ShadowGreen = 0.1,
         OutlineColor = { 0.113, 0.113, 0.113, 1 }, OutlineThickness = 1,
         ShadowAlpha = 1.0, ShadowBlur = 0, ShadowOffsetY = 2, ShadowOffsetX = 0,
-        Justification = "Left",
+        Justification = "Center",
     }, LocalizationData.UIScripts.HealthUI))
 
     SetAnimation({ Name = "HealthBar", DestinationId = self.ScreenAnchors.HealthBack })
