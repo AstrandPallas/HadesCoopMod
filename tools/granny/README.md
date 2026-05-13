@@ -129,6 +129,63 @@ cp LSLib/publish/*.dll C:/Users/matte/src/lslib/ExportTool/Packed/Tools/
 - 9 entries hit a different lslib export bug (Aspect of Morrigan dagger
   executes, blur effects, Lob run-stop). Skip those clips.
 
+## render_mel.py — headless Blender → PNG sequences per angle
+
+Drives Blender in `--background` mode (or via the `bpy` pip package) to
+render a mesh+animation pair as orthographic-camera PNG sequences at N
+angles around the character. Output mirrors the layout vanilla Hades
+uses for Bink files (32 angles × N frames at 128×224, 3,840 frames total
+for movement animations).
+
+```bash
+# Via installed Blender CLI:
+blender --background --python tools/granny/render_mel.py -- \
+  --mesh tools/granny/melinoe-glb/Melinoe_Mesh.glb \
+  --anim tools/granny/melinoe-glb/Dagger_Weapon_Base_DaggerEquipIdleR_C_00.glb \
+  --out  tools/granny/render/Dagger_Idle
+
+# Via bpy pip package (no Blender install required):
+pip install bpy
+python tools/granny/render_mel.py \
+  --mesh tools/granny/melinoe-glb/Melinoe_Mesh.glb \
+  --anim tools/granny/melinoe-glb/Dagger_Weapon_Base_DaggerEquipIdleR_C_00.glb \
+  --out  tools/granny/render/Dagger_Idle
+```
+
+**Output:** `<out>/angle_NN/frame_NNNN.png` — one subdir per orbit angle,
+PNGs inside named by source frame number.
+
+**Calibration workflow:**
+1. Run on a single animation with defaults
+2. Compare `angle_00/frame_0001.png` against a Bink frame from vanilla
+   Zagreus (extract first frame with `bink2ForUnreal` File Info → Save
+   PNG sequence)
+3. Tune `--pitch`, `--ortho-scale`, `--target-z`, and lighting energy
+   until silhouettes line up
+4. Test on a second animation to confirm tuning generalizes
+5. Batch over all animations using a wrapper script
+
+**Tunable params** (defaults in parentheses):
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--angles` | `32` | Matches Zagreus's Bink layout |
+| `--pitch` | `45.0` | Camera angle below horizontal; Hades's actual angle is closer to 30-35° |
+| `--ortho-scale` | `2.5` | Smaller = closer crop |
+| `--target-z` | `1.0` | Z of camera look-at point (character mid-height) |
+| `--distance` | `5.0` | Orbit radius (less impactful than ortho-scale) |
+| `--res` | `128x224` | Matches vanilla Zag Bink dims |
+| `--engine` | `EEVEE` | Or `CYCLES` for slower but higher fidelity |
+| `--frame-step` | `1` | Skip every Nth frame for fast preview |
+| `--max-frames` | `0` | If >0, only render first N frames per angle (debug) |
+
+After all 32×N PNGs render, the Bink encoding step is:
+1. Concatenate the per-angle PNG sequences into one ordered stream
+2. Feed to `Bink2ForUnreal.exe` (from UE5 install) to encode
+3. Hex-edit the Bink2 header for Bink 2.5 compat (Hades's loader is fussy
+   about this — [EtchJetty/BinkFixTutorial](https://github.com/EtchJetty/BinkFixTutorial)
+   documents the procedure)
+
 ## Verified output
 
 - `granny_unpack.py unpack-all` on `Melinoe.gpk` + `Melinoe.sdb`: 855/855

@@ -1,0 +1,264 @@
+"""
+Headless Blender render driver for Mel sprite generation.
+
+Loads a mesh .glb (skeleton + geometry) and an animation .glb (skeletal
+action data), assigns the action to the mesh's armature, orbits an
+orthographic camera through N angles around the character, and emits
+PNG sequences ready to be Bink-encoded as a Hades-1-style sprite sheet.
+
+Usage (Blender installed):
+    blender --background --python render_mel.py -- \\
+        --mesh   tools/granny/melinoe-glb/Melinoe_Mesh.glb \\
+        --anim   tools/granny/melinoe-glb/Dagger_Weapon_Base_DaggerEquipIdleR_C_00.glb \\
+        --out    tools/granny/render/Dagger_Idle
+
+Usage (bpy installed via `pip install bpy`):
+    python render_mel.py \\
+        --mesh   tools/granny/melinoe-glb/Melinoe_Mesh.glb \\
+        --anim   tools/granny/melinoe-glb/Dagger_Weapon_Base_DaggerEquipIdleR_C_00.glb \\
+        --out    tools/granny/render/Dagger_Idle
+
+Output layout (per (angle, frame) pair):
+    <out>/angle_00/frame_0001.png
+    <out>/angle_00/frame_0002.png
+    ...
+    <out>/angle_31/frame_NNNN.png
+
+The first pass is intentionally easy to inspect: each angle gets its own
+subdirectory so you can scrub through one angle's PNGs as a sanity check
+before committing to a Bink encoding layout.
+
+Tuning workflow:
+  1. Run with defaults on a single animation
+  2. Compare frame_0001 of a known angle against vanilla Zagreus's
+     equivalent pose (extract with `bink2ForUnreal` -> first PNG frame)
+  3. Adjust --pitch / --ortho-scale / --target-z / lighting until silhouettes
+     line up
+  4. Once one animation looks right, batch over all 791 Mel glbs.
+
+Known camera tuning starting points (subject to revision after eyeball
+comparison against vanilla Zagreus Bink frames):
+  pitch:        45°  (Hades's actual 3/4 top-down is closer to 30-35°,
+                      but 45° is a clean starting point)
+  ortho-scale:  2.5  (smaller = zoomed in)
+  target-z:     1.0  (height of "look at" point above floor; should be
+                      roughly center-of-mass of the character)
+  distance:     5.0  (orbit radius; ortho scale matters more than this)
+"""
+
+import argparse
+import math
+import os
+import sys
+from pathlib import Path
+
+
+def _parse_args():
+    # Blender's `--background --python script.py -- arg1 arg2` passes args
+    # after `--` to the script. The bpy-pip path just uses argv normally.
+    argv = sys.argv
+    if "--" in argv:
+        argv = argv[argv.index("--") + 1:]
+    else:
+        argv = argv[1:]
+
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    p.add_argument("--mesh", required=True, help="Path to mesh .glb")
+    p.add_argument("--anim", required=True, help="Path to animation .glb")
+    p.add_argument("--out", required=True, help="Output directory for PNG sequences")
+    p.add_argument("--angles", type=int, default=32,
+                   help="Number of orbital camera angles (default: 32, matches vanilla Zag)")
+    p.add_argument("--pitch", type=float, default=45.0,
+                   help="Camera pitch in degrees below horizontal")
+    p.add_argument("--ortho-scale", type=float, default=2.5,
+                   help="Orthographic camera scale (smaller = closer)")
+    p.add_argument("--target-z", type=float, default=1.0,
+                   help="Z-coordinate the camera looks at (character mid-height)")
+    p.add_argument("--distance", type=float, default=5.0,
+                   help="Camera orbit radius from target")
+    p.add_argument("--res", default="128x224",
+                   help="Output resolution WxH (default: 128x224 matches Zag's Bink dims)")
+    p.add_argument("--engine", default="EEVEE",
+                   help="Render engine: EEVEE (fast) or CYCLES (slow, CPU/GPU)")
+    p.add_argument("--frame-step", type=int, default=1,
+                   help="Render every Nth frame (1 = every frame)")
+    p.add_argument("--max-frames", type=int, default=0,
+                   help="If >0, cap total frames per angle (debug)")
+    return p.parse_args(argv)
+
+
+def _set_render_engine(scene, engine_name: str):
+    """EEVEE name varies across Blender versions; pick the one that exists."""
+    candidates = {
+        "EEVEE": ["BLENDER_EEVEE_NEXT", "BLENDER_EEVEE"],
+        "CYCLES": ["CYCLES"],
+    }
+    for name in candidates.get(engine_name.upper(), [engine_name]):
+        try:
+            scene.render.engine = name
+            return name
+        except (TypeError, AttributeError):
+            continue
+    raise RuntimeError(f"Could not set render engine to {engine_name}")
+
+
+def _import_glb(path: str):
+    """Wrap the glTF importer call so it tolerates both old and new Blender APIs."""
+    import bpy
+    bpy.ops.import_scene.gltf(filepath=path)
+
+
+def _find_armatures(bpy):
+    return [o for o in bpy.context.scene.objects if o.type == 'ARMATURE']
+
+
+def _transfer_action_to(target_armature, source_armature):
+    """Move the action from source_armature to target_armature so it animates
+    the imported mesh. Then delete the source armature (it's redundant)."""
+    import bpy
+    if source_armature.animation_data is None or source_armature.animation_data.action is None:
+        return False
+    action = source_armature.animation_data.action
+    if target_armature.animation_data is None:
+        target_armature.animation_data_create()
+    target_armature.animation_data.action = action
+    # Delete the now-redundant source armature and its children.
+    for child in list(source_armature.children):
+        bpy.data.objects.remove(child, do_unlink=True)
+    bpy.data.objects.remove(source_armature, do_unlink=True)
+    return True
+
+
+def main():
+    args = _parse_args()
+
+    import bpy  # imported here so argparse failures don't blame bpy
+    import mathutils  # noqa: F401
+
+    # Clean slate. Removes ALL default objects/cameras/lights/etc.
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    print(f"Loading mesh: {args.mesh}")
+    _import_glb(args.mesh)
+    mesh_armatures = _find_armatures(bpy)
+    if not mesh_armatures:
+        print(f"ERROR: no armature in mesh glb {args.mesh}", file=sys.stderr)
+        return 1
+    mesh_armature = mesh_armatures[0]
+    print(f"  mesh armature: {mesh_armature.name}  bones={len(mesh_armature.data.bones)}")
+
+    print(f"Loading animation: {args.anim}")
+    _import_glb(args.anim)
+    all_armatures = _find_armatures(bpy)
+    new_armatures = [a for a in all_armatures if a is not mesh_armature]
+    if new_armatures:
+        anim_armature = new_armatures[-1]
+        if _transfer_action_to(mesh_armature, anim_armature):
+            print(f"  transferred action from {anim_armature.name} -> {mesh_armature.name}")
+        else:
+            print(f"  warning: animation armature {anim_armature.name} had no action")
+    else:
+        # No new armature created — the importer might have merged the
+        # action onto the existing armature already, or this glb has no
+        # skeletal data. Either way, check what's on the mesh armature.
+        if mesh_armature.animation_data and mesh_armature.animation_data.action:
+            print(f"  action already on mesh armature: {mesh_armature.animation_data.action.name}")
+        else:
+            print(f"  warning: no animation action found anywhere; will render a static pose")
+
+    # Configure scene render settings.
+    scene = bpy.context.scene
+    res_w, res_h = (int(x) for x in args.res.split("x"))
+    scene.render.resolution_x = res_w
+    scene.render.resolution_y = res_h
+    scene.render.image_settings.file_format = 'PNG'
+    scene.render.image_settings.color_mode = 'RGBA'
+    scene.render.film_transparent = True
+    actual_engine = _set_render_engine(scene, args.engine)
+    print(f"render engine: {actual_engine}  resolution: {res_w}x{res_h}")
+
+    # Determine animation frame range from the action.
+    action = (mesh_armature.animation_data and
+              mesh_armature.animation_data.action)
+    if action is not None:
+        fr_start, fr_end = action.frame_range
+        scene.frame_start = max(1, int(fr_start))
+        scene.frame_end = int(fr_end)
+    else:
+        scene.frame_start = 1
+        scene.frame_end = 1
+    print(f"frame range: {scene.frame_start} to {scene.frame_end}")
+
+    # Add a sun key light + sun fill light. Energy values are starting
+    # points; tune against reference for the Hades-style look.
+    key_data = bpy.data.lights.new(name="Key", type='SUN')
+    key_data.energy = 5.0
+    key = bpy.data.objects.new("Key", key_data)
+    scene.collection.objects.link(key)
+    key.rotation_euler = (math.radians(60), 0, math.radians(45))
+
+    fill_data = bpy.data.lights.new(name="Fill", type='SUN')
+    fill_data.energy = 1.5
+    fill = bpy.data.objects.new("Fill", fill_data)
+    scene.collection.objects.link(fill)
+    fill.rotation_euler = (math.radians(60), 0, math.radians(-135))
+
+    # Orthographic camera that orbits a target empty.
+    cam_data = bpy.data.cameras.new("Camera")
+    cam_data.type = 'ORTHO'
+    cam_data.ortho_scale = args.ortho_scale
+    cam = bpy.data.objects.new("Camera", cam_data)
+    scene.collection.objects.link(cam)
+    scene.camera = cam
+
+    target = bpy.data.objects.new("OrbitTarget", None)
+    scene.collection.objects.link(target)
+    target.location = (0.0, 0.0, args.target_z)
+
+    track = cam.constraints.new(type='TRACK_TO')
+    track.target = target
+    track.track_axis = 'TRACK_NEGATIVE_Z'
+    track.up_axis = 'UP_Y'
+
+    pitch_rad = math.radians(args.pitch)
+    radius = args.distance
+
+    Path(args.out).mkdir(parents=True, exist_ok=True)
+    total_frames_per_angle = max(
+        1,
+        (scene.frame_end - scene.frame_start) // max(1, args.frame_step) + 1,
+    )
+    if args.max_frames > 0:
+        total_frames_per_angle = min(total_frames_per_angle, args.max_frames)
+    total = args.angles * total_frames_per_angle
+    print(f"rendering {args.angles} angles × {total_frames_per_angle} frames = {total} images")
+
+    rendered = 0
+    for angle_idx in range(args.angles):
+        theta = 2.0 * math.pi * angle_idx / args.angles
+        cam.location = (
+            radius * math.cos(pitch_rad) * math.sin(theta),
+            -radius * math.cos(pitch_rad) * math.cos(theta),
+            target.location.z + radius * math.sin(pitch_rad),
+        )
+        angle_dir = Path(args.out) / f"angle_{angle_idx:02d}"
+        angle_dir.mkdir(exist_ok=True)
+
+        frame_indices = list(range(scene.frame_start, scene.frame_end + 1, args.frame_step))
+        if args.max_frames > 0:
+            frame_indices = frame_indices[:args.max_frames]
+
+        for frame in frame_indices:
+            scene.frame_set(frame)
+            scene.render.filepath = str(angle_dir / f"frame_{frame:04d}.png")
+            bpy.ops.render.render(write_still=True)
+            rendered += 1
+            if rendered % 20 == 0:
+                print(f"  {rendered}/{total}  (angle {angle_idx}, frame {frame})")
+
+    print(f"\nDone. {rendered} renders in {args.out}/")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
