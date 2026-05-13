@@ -231,29 +231,39 @@ function LootRoomDuplicated.Reset(heroesCount)
     HeroContextProxyStore.GetOrCreate("LootTypeHistory"):Reset()
     CurrentRun.StyxLoot = nil
     local room = CurrentRun.CurrentRoom
-    if room and room.ChosenRewardType == "Boon" and room.ForceLootName then
+
+    -- Pre-populate ChosenPlayerLoot so the starting room's free reward
+    -- duplicates for every additional player. Any reward type the mod
+    -- already duplicates downstream (Boon, WeaponUpgrade i.e. Daedalus
+    -- hammers, HermesUpgrade i.e. gun upgrades, StackUpgrade i.e.
+    -- pomegranates, etc.) is fair game — gated on DuplicatedRewards.
+    if room and room.ForceLootName and LootRoomDuplicated.DuplicatedRewards[room.ChosenRewardType] then
         LootRoomDuplicated.ChosenPlayerLoot = {{
             rewardType = room.ChosenRewardType,
             lootName = room.ForceLootName
         }}
         for playerId, hero in CoopPlayers.AdditionalHeroesIterator() do
-            local keepsake = HeroEx.GetGiftAndAssist(hero)
+            -- Default: mirror P1's loot name exactly. This is the right
+            -- answer for every non-Boon reward (Daedalus / Hermes / Stack
+            -- upgrades have no keepsake-equivalent — all players get the
+            -- same item P1 got).
+            local lootName = room.ForceLootName
 
-            local trait = keepsake and TraitData[keepsake]
-            if trait and trait.ForceBoonName then
-                LootRoomDuplicated.ChosenPlayerLoot[playerId] = {
-                    rewardType = room.ChosenRewardType,
+            -- For Boon rewards specifically, a player's keepsake can force
+            -- a specific god's boon to drop. Honor that when it's set;
+            -- otherwise fall back to mirroring P1's boon.
+            if room.ChosenRewardType == "Boon" then
+                local keepsake = HeroEx.GetGiftAndAssist(hero)
+                local trait = keepsake and TraitData[keepsake]
+                if trait and trait.ForceBoonName then
                     lootName = trait.ForceBoonName
-                }
-            else
-                -- No keepsake-forced boon: mirror P1's so SpawnRoomReward's per-player
-                -- loop has a valid ForceLootName. Without this, vanilla SpawnRoomReward
-                -- spawns nothing for this player on the starting room.
-                LootRoomDuplicated.ChosenPlayerLoot[playerId] = {
-                    rewardType = room.ChosenRewardType,
-                    lootName = room.ForceLootName
-                }
+                end
             end
+
+            LootRoomDuplicated.ChosenPlayerLoot[playerId] = {
+                rewardType = room.ChosenRewardType,
+                lootName = lootName,
+            }
         end
     end
 

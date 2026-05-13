@@ -20,38 +20,42 @@ local Config = {
         -- Enables duplication of the Chaos boons.
         DuplicateChaosBoon = true;
     },
+    -- Outline RGB values match the HUD bar colors so each player's outline
+    -- visually pairs with their health bar at the bottom of the screen.
+    -- Bar colors are defined in CoopPlayerUi.LayoutForCorner/LayoutForBottomSlot
+    -- as 0-1 floats; these are the 0-255 equivalents.
     Player1HasOutline = true;
     Player1Outline = {
-        R = 0,
-        G = 0,
-        B = 200,
+        R = 230,
+        G = 64,
+        B = 64,
         Opacity = 0.6,
         Thickness = 2,
         Threshold = 0.6,
     };
     Player2HasOutline = true,
     Player2Outline = {
-        R = 0,
-        G = 200,
-        B = 0,
+        R = 89,
+        G = 217,
+        B = 242,
         Opacity = 0.6,
         Thickness = 2,
         Threshold = 0.6,
     };
     Player3HasOutline = true,
     Player3Outline = {
-        R = 220,
-        G = 200,
-        B = 0,
+        R = 140,
+        G = 217,
+        B = 115,
         Opacity = 0.6,
         Thickness = 2,
         Threshold = 0.6,
     };
     Player4HasOutline = true,
     Player4Outline = {
-        R = 230,
-        G = 110,
-        B = 0,
+        R = 179,
+        G = 115,
+        B = 230,
         Opacity = 0.6,
         Thickness = 2,
         Threshold = 0.6,

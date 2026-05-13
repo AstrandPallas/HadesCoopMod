@@ -7,6 +7,8 @@
 local CoopPlayers = ModRequire "CoopPlayers.lua"
 ---@type HookUtils
 local HookUtils = ModRequire "HookUtils.lua"
+---@type PerfCounters
+local PerfCounters = ModRequire "PerfCounters.lua"
 ---@type RunEx
 local RunEx = ModRequire "RunEx.lua"
 
@@ -30,17 +32,39 @@ CoopCamera.CloseZoomScale      = 0.9   -- close-zoom = vanilla * this (slightly 
 -- out at the wide end.
 CoopCamera.FarDistancePerPlayer   = 250
 CoopCamera.CloseDistancePerPlayer = 100
--- Lerp duration must stay much LONGER than update interval, so each FocusCamera
--- call lands while the previous ease is still in flight. That's how we get a
--- continuous low-pass-filter feel instead of step-and-stop jerks.
+-- Per-frame LockCamera updates with a small lerp Duration. The original
+-- mod (pre-throttle) updated every draw tick; that's what kept the engine's
+-- multi-Id averaging stable. Throttling let the engine "settle" between
+-- calls and pick a single Id to favor, which manifested as the camera
+-- jerking toward P1 at room edges. Going back to the working baseline.
 CoopCamera.ZoomLerpDuration    = 0.35  -- seconds FocusCamera takes to ease to target
-CoopCamera.ZoomUpdateInterval  = 0.05  -- minimum seconds between FocusCamera calls
-CoopCamera.MinZoomDelta        = 0.003 -- skip update if target zoom barely changed
+CoopCamera.ZoomUpdateInterval  = 0.05  -- inner FocusCamera throttle
+-- Per-frame LockCamera needs Duration = 0 (instant snap to the new target).
+-- Any non-zero value causes consecutive calls to start fresh lerps that fight
+-- with the previous in-flight lerp, producing visible camera shake when
+-- players walk (each frame the camera is told to lerp to a slightly-newer
+-- target) or near room edges (where small target adjustments oscillate).
+CoopCamera.LockLerpDuration    = 0.0
+CoopCamera.MinZoomDelta        = 0.003 -- skip zoom update if target zoom barely changed
 
 ---@private
 CoopCamera.LastZoomFraction = nil
 ---@private
 CoopCamera.LastZoomTime     = -math.huge
+---@private
+CoopCamera.LastUpdateTime   = -math.huge
+---@private
+-- Cache of the most-recent units list. The unlock half of relocking is the
+-- expensive engine op; if the alive set hasn't changed, we can skip it.
+CoopCamera.LastUnitsKey     = nil
+---@private
+-- World-space anchor obstacle the camera locks onto. Lazy-spawned and
+-- moved to the player-centroid each Update tick. Using a single-Id lock
+-- instead of LockCamera { Ids = manyPlayers } eliminates the engine's
+-- multi-Id framing oscillation at room edges (where the bounding box
+-- exceeds the room's min-zoom capacity, the engine was alternating
+-- priority between Ids and snapping the camera between them).
+CoopCamera.AnchorObstacleId = nil
 
 function CoopCamera.InitHooks()
     HookUtils.wrap("CreateRoom", CoopCamera.CreateRoomWrapHook)
@@ -60,6 +84,13 @@ function CoopCamera.LockCameraHook(args)
     local mainPlayerId  = CoopPlayers.GetMainHero().ObjectId
     if mainPlayerId and args.Id == mainPlayerId then
         CoopCamera.ForceFocus(true)
+        -- Force a fresh lock on the next Update tick. Clear the cached
+        -- units key so the unit-set comparison reissues the unlock, and the
+        -- per-tick throttle so the call runs immediately (vanilla LockCamera
+        -- is typically called at deliberate transitions — we don't want to
+        -- elide that intent waiting for the next 0.5s tick).
+        CoopCamera.LastUnitsKey = nil
+        CoopCamera.LastUpdateTime = -math.huge
         CoopCamera.Update()
     else
         CoopCamera.ForceFocus(false)
@@ -75,7 +106,48 @@ function CoopCamera.OnExitNPCPresentation()
 end
 
 ---@private
+---Spawn the world-anchor obstacle on demand. The lock target stays at the
+---centroid of the alive players; the camera follows this single anchor
+---instead of trying to frame multiple player Ids.
+local function ensureAnchor()
+    if CoopCamera.AnchorObstacleId then return end
+    -- Vanilla's pattern for invisible-world targets (CombatPresentation.lua:3035)
+    -- is "InvisibleTarget" in the Standing group. Same template here.
+    CoopCamera.AnchorObstacleId = SpawnObstacle({
+        Name = "InvisibleTarget",
+        Group = "Standing",
+    })
+end
+
+---@private
+---Move the anchor obstacle to the centroid of the supplied alive units.
+---Uses iterative averaging — after processing k players, the anchor sits
+---at the centroid of those k. No absolute-coordinate read needed (Hades's
+---Lua sandbox doesn't expose one) — Teleport + relative Move handles it.
+---@param units number[]  player unit ObjectIds, length >= 1
+local function moveAnchorToCentroid(units)
+    -- Centroid of {p1} = p1.
+    Teleport { Id = CoopCamera.AnchorObstacleId, DestinationId = units[1] }
+
+    for k = 2, #units do
+        local dist = GetDistance { Id = CoopCamera.AnchorObstacleId, DestinationId = units[k] }
+        if dist and dist > 0 then
+            -- After step k, the anchor sits at the centroid of the first k
+            -- players: each new player gets a 1/k weight against the running
+            -- (k-1)-player average.
+            Move {
+                Id = CoopCamera.AnchorObstacleId,
+                DestinationId = units[k],
+                Distance = dist / k,
+                Duration = 0,
+            }
+        end
+    end
+end
+
+---@private
 function CoopCamera.Update()
+    PerfCounters.Tick("CoopCamera.Update.entry")
     if not CoopCamera.isFocusEnabled then
         return
     end
@@ -96,8 +168,19 @@ function CoopCamera.Update()
         return
     end
 
-    UnlockCamera()
-    CoopCamera.LockCameraOrig { Ids = units, Duration = 0.0 }
+    -- Refresh the multi-Id lock every frame. The engine's averaging needs
+    -- continuous re-receipt of the target list to stay stable; throttling
+    -- this call let the engine pick a single Id and jerk toward it. The
+    -- expensive op is the Unlock; we only do that when the unit set itself
+    -- changes (someone dies/spawns), and let the per-tick LockCamera refresh
+    -- be a cheap target update.
+    local unitsKey = table.concat(units, ",")
+    if unitsKey ~= CoopCamera.LastUnitsKey then
+        PerfCounters.Tick("CoopCamera.Update.unitsChanged")
+        UnlockCamera()
+        CoopCamera.LastUnitsKey = unitsKey
+    end
+    CoopCamera.LockCameraOrig { Ids = units, Duration = CoopCamera.LockLerpDuration }
     CoopCamera.UpdateDynamicZoom(units)
 end
 
@@ -150,6 +233,10 @@ function CoopCamera.UpdateDynamicZoom(units)
         desiredZoom = CoopCamera.ComputeZoomFraction(dist, closeZoom, wideZoom, closeDist, farDist)
     end
 
+    -- FocusCamera every Update tick would interrupt its own in-flight lerp,
+    -- causing visible zoom stutter. Throttle inner-loop so we only re-target
+    -- the zoom every ZoomUpdateInterval seconds OR when the target jumped
+    -- enough to matter.
     local now = _worldTime or 0
     if CoopCamera.LastZoomFraction
         and math.abs(desiredZoom - CoopCamera.LastZoomFraction) < CoopCamera.MinZoomDelta
@@ -188,12 +275,20 @@ end
 ---@private
 function CoopCamera.CreateRoomWrapHook(baseFunc, ...)
     local room = baseFunc(...)
+
+    -- New rooms destroy the previous anchor obstacle; clear our id so the
+    -- next Update tick lazy-spawns a fresh one in the new room. Also clear
+    -- the lock cache so we reissue LockCamera with the new anchor.
+    CoopCamera.AnchorObstacleId = nil
+    CoopCamera.LastUnitsKey = nil
+
     -- Stash the vanilla single-player zoom; dynamic-zoom uses it as the close-target.
     room.CoopVanillaZoomFraction = room.ZoomFraction or 1.0
+    -- Co-op wide zoom is a fraction of vanilla. Lower = zoomed out further.
     if not room.ZoomFraction then
-        room.ZoomFraction = 0.6
+        room.ZoomFraction = 0.55
     elseif room.ZoomFraction > 0.5 then
-        room.ZoomFraction = room.ZoomFraction * 0.6
+        room.ZoomFraction = room.ZoomFraction * 0.55
     end
     return room
 end

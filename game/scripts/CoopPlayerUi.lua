@@ -41,6 +41,7 @@ CoopPlayerUi.__index = CoopPlayerUi
 ---@field selfStoredAmmoBaseOffsetX number
 ---@field selfStoredAmmoBaseOffsetY number
 ---@field healthTextOffsetX number   X offset for the "current/max" health text relative to the bar anchor
+---@field barColor number[]          RGBA tuple for the health-bar fill tint (also used by the floating P# label)
 
 ---@type table<number, CoopPlayerUi>
 CoopPlayerUi.Instances = {}
@@ -95,6 +96,12 @@ function CoopPlayerUi.LayoutForCorner(corner)
             selfStoredAmmoBaseOffsetX = 600 + 380,
             selfStoredAmmoBaseOffsetY = -50,
             healthTextOffsetX = -90,
+            -- SetAnimation Color is 0-255 RGBA (matches Color.Black = {0,0,0,255}).
+            -- Bar tint values are pre-saturated to compensate for the texture's
+            -- pastel-ifying multiply blend — the outline+label use brighter RGBs
+            -- (89/217/242 etc.) but the bar needs darker dominant-channel input
+            -- to render at the same apparent vividness.
+            barColor = { 0, 180, 220, 255 },  -- P2 cyan
         }
     elseif corner == "TL" then
         return {
@@ -120,6 +127,7 @@ function CoopPlayerUi.LayoutForCorner(corner)
             selfStoredAmmoBaseOffsetX = 10,
             selfStoredAmmoBaseOffsetY = 50,
             healthTextOffsetX = 0,
+            barColor = { 60, 200, 40, 255 },  -- placeholder green; TL is unused in current 4P layout
         }
     elseif corner == "TR" then
         return {
@@ -145,6 +153,7 @@ function CoopPlayerUi.LayoutForCorner(corner)
             selfStoredAmmoBaseOffsetX = 600 + 380,
             selfStoredAmmoBaseOffsetY = 50,
             healthTextOffsetX = -90,
+            barColor = { 150, 40, 220, 255 },  -- placeholder purple; TR is unused in current 4P layout
         }
     else -- "BL"
         return {
@@ -170,8 +179,82 @@ function CoopPlayerUi.LayoutForCorner(corner)
             selfStoredAmmoBaseOffsetX = 10,
             selfStoredAmmoBaseOffsetY = -50,
             healthTextOffsetX = 0,
+            barColor = { 150, 40, 220, 255 },  -- placeholder purple; BL is unused in current 4P layout
         }
     end
+end
+
+-- Build a position config for slot 3 or 4 along the bottom row, filling the
+-- gap BETWEEN P1's vanilla bottom-left HUD and P2's bottom-right CoopPlayerUi.
+-- P1 and P2 are NOT touched. P3 and P4 anchor evenly between them so the
+-- on-screen left-to-right reading order is P1 - P3 - P4 - P2, each tinted in
+-- its own player color.
+--
+-- The relative offsets (lifepips/ammo/super/gun positions vs the bar anchor)
+-- mirror LayoutForCorner("BR")'s right-anchored shape exactly, just translated
+-- to the new X anchor. That keeps the visual block per slot recognizable.
+---@param slotIndex 3 | 4
+---@return CoopPlayerUiPosition
+function CoopPlayerUi.LayoutForBottomSlot(slotIndex)
+    -- SetAnimation Color is 0-255 RGBA (see Color.lua: Black = {0,0,0,255}).
+    -- These are pre-saturated for the bar's pastel-ifying multiply blend —
+    -- see the BR comment in LayoutForCorner for the same rationale.
+    local barColors = {
+        [3] = { 60,  200, 40,  255 },   -- P3 green
+        [4] = { 150, 40,  220, 255 },   -- P4 purple
+    }
+
+    -- Approximate P1's left edge (vanilla bar anchor) and P2's BR anchor.
+    -- P2's healthBarX is ScreenWidth - 500; P1's vanilla position is just
+    -- inside the left edge. The three evenly-spaced anchor points across
+    -- the gap put slot 3 at 1/3 and slot 4 at 2/3.
+    local p1AnchorX = 50
+    local p2AnchorX = ScreenWidth - 500
+    local step = (p2AnchorX - p1AnchorX) / 3
+    local barX = p1AnchorX + (slotIndex - 2) * step
+
+    DebugPrint { Text = "TN_Coop LayoutForBottomSlot slot=" .. tostring(slotIndex)
+        .. " ScreenWidth=" .. tostring(ScreenWidth)
+        .. " ScreenHeight=" .. tostring(ScreenHeight)
+        .. " barX=" .. tostring(barX)
+        .. " barColor=" .. tostring(barColors[slotIndex] and barColors[slotIndex][1])
+    }
+
+    return {
+        healthBarX = barX,
+        healthBarY = ScreenHeight - 50,
+        -- LifePipBaseX is the rightmost pip; pips grow leftward by 32 each.
+        -- BR's vanilla value puts pips at the far right of the bar art so they
+        -- read against the room-shadow background. For a bottom-row slot
+        -- there's no shadow to anchor against — centering the pip cluster on
+        -- the bar middle (barX + ~210, the visual center of the ~420-wide bar
+        -- art) reads cleaner. base = barX + 242 puts a 3-pip cluster centered
+        -- on barX + 210; a 5-pip cluster will lean ~32px right of center.
+        lifePipBaseX = barX + 242,
+        lifePipY = ScreenHeight - 95,
+        ammoIndicatorX = barX - 162,
+        ammoIndicatorY = ScreenHeight - 62,
+        ammoReloadX = barX - 144,
+        ammoReloadY = ScreenHeight - 70,
+        ammoReloadMultiYOffset = 35,
+        ammoReloadFinishTargetYOffset = 40,
+        superMeterX = barX + 20,
+        superMeterY = ScreenHeight - 10,
+        superPipY = SuperUI.PipY,
+        gunUiX = barX + 336 - GunUI.StartX,
+        gunUiY = GunUI.StartY,
+        -- Shadow sits below the bottom edge (largely off-screen) — the
+        -- decorative corner-shadow only really reads at screen corners and
+        -- this slot isn't at one. Keep the value so SetAnimation has a target.
+        shadowX = barX + 250,
+        shadowY = ScreenHeight + 100,
+        shadowFlipX = false,
+        shadowFlipY = false,
+        selfStoredAmmoBaseOffsetX = 980,
+        selfStoredAmmoBaseOffsetY = -50,
+        healthTextOffsetX = -90,
+        barColor = barColors[slotIndex],
+    }
 end
 
 -- --------------------------------------------------------------------------
@@ -179,11 +262,20 @@ end
 -- --------------------------------------------------------------------------
 
 function CoopPlayerUi:ShowHealthUI()
+    DebugPrint { Text = "TN_Coop ShowHealthUI entered playerId=" .. tostring(self.playerId)
+        .. " ShowUIAnimations=" .. tostring(ConfigOptionCache.ShowUIAnimations)
+        .. " HealthBack=" .. tostring(self.ScreenAnchors.HealthBack)
+        .. " healthBarX=" .. tostring(self.position and self.position.healthBarX)
+        .. " barColor=" .. tostring(self.position and self.position.barColor and self.position.barColor[1])
+    }
     if not ConfigOptionCache.ShowUIAnimations then return end
     if self.ScreenAnchors.HealthBack ~= nil then return end
 
     local hero = CoopPlayers.GetHero(self.playerId)
-    if hero == nil then return end
+    if hero == nil then
+        DebugPrint { Text = "TN_Coop ShowHealthUI hero nil for playerId=" .. tostring(self.playerId) }
+        return
+    end
 
     local p = self.position
     local barX = p.healthBarX - (10 - CombatUI.FadeDistance.Health)
@@ -226,7 +318,7 @@ function CoopPlayerUi:ShowHealthUI()
     SetAnimation({ Name = "HealthBar", DestinationId = self.ScreenAnchors.HealthBack })
 
     local frameTarget = 1 - (hero.Health / hero.MaxHealth)
-    SetAnimation({ Name = "HealthBarFill",      DestinationId = self.ScreenAnchors.HealthFill,  FrameTarget = frameTarget, Instant = true, Color = Color.Black })
+    SetAnimation({ Name = "HealthBarFill",      DestinationId = self.ScreenAnchors.HealthFill,  FrameTarget = frameTarget, Instant = true, Color = p.barColor })
     SetAnimation({ Name = "HealthBarFillWhite", DestinationId = self.ScreenAnchors.HealthRally, FrameTarget = frameTarget, Instant = true, Color = Color.RallyHealth })
 
     self:UpdateHealthUI()

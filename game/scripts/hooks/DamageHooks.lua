@@ -17,12 +17,15 @@ local HeroContextWrapper = ModRequire "../HeroContextWrapper.lua"
 local HookUtils = ModRequire "../HookUtils.lua"
 ---@type CoopModConfig
 local Config = ModRequire "../config.lua"
+---@type PerfCounters
+local PerfCounters = ModRequire "../PerfCounters.lua"
 
 local _OnHit = OnHit
 function OnHit(args)
     -- Only one usage
     local fun = args[1]
     _OnHit { function(triggerArgs)
+        PerfCounters.Tick("OnHit")
         local attacker = triggerArgs.AttackerTable
         local victim = triggerArgs.TriggeredByTable
 
@@ -83,6 +86,7 @@ function OnProjectileDeath(args)
     local originalHandler = args[1]
 
     _OnProjectileDeath { function(triggerArgs)
+        PerfCounters.Tick("OnProjectileDeath")
         local attacker = triggerArgs.AttackerTable
         local isAttackerPlayer = attacker and CoopPlayers.IsPlayerHero(attacker)
         local victim = triggerArgs.TriggeredByTable
@@ -125,6 +129,7 @@ HookUtils.wrap("OnEffectApply", function(baseFunc, args)
 
     baseFunc{
         function(triggerArgs)
+            PerfCounters.Tick("OnEffectApply")
             local target = triggerArgs.TriggeredByTable
             if CoopPlayers.IsPlayerHero(target) then
                 HeroContext.RunWithHeroContext(target, originalHandler, triggerArgs)
