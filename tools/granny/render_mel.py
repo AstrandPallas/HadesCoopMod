@@ -114,26 +114,56 @@ def _find_armatures(bpy):
 
 def _transfer_action_to(target_armature, source_armature):
     """Move the action from source_armature to target_armature so it animates
-    the imported mesh. Then delete the source armature (it's redundant)."""
+    the imported mesh. Then delete the source armature (it's redundant).
+
+    Returns the action name on success (the source armature reference is
+    invalid after this call returns), or None if there was no action to
+    transfer."""
     import bpy
     if source_armature.animation_data is None or source_armature.animation_data.action is None:
-        return False
+        return None
     action = source_armature.animation_data.action
+    action_name = action.name
+    source_name = source_armature.name
     if target_armature.animation_data is None:
         target_armature.animation_data_create()
     target_armature.animation_data.action = action
-    # Delete the now-redundant source armature and its children.
+    # Delete the now-redundant source armature and its children. After
+    # this point, callers must NOT touch `source_armature` (its StructRNA
+    # is freed).
     for child in list(source_armature.children):
         bpy.data.objects.remove(child, do_unlink=True)
     bpy.data.objects.remove(source_armature, do_unlink=True)
-    return True
+    return action_name, source_name
+
+
+def _disable_noisy_addons():
+    """Disable third-party addons that throw spurious errors on factory-
+    reset scenes (e.g. Valve Source Tools' depsgraph handler tries to
+    touch scene.vs which doesn't exist on an empty scene)."""
+    import bpy
+    for addon_name in ("io_scene_valvesource",):
+        try:
+            bpy.ops.preferences.addon_disable(module=addon_name)
+        except Exception:
+            pass
 
 
 def main():
     args = _parse_args()
 
+    # Resolve to absolute paths so the script doesn't depend on Blender's
+    # cwd (it typically starts in C:\ on Windows, not the user's repo).
+    args.mesh = str(Path(args.mesh).resolve())
+    args.anim = str(Path(args.anim).resolve())
+    args.out = str(Path(args.out).resolve())
+
     import bpy  # imported here so argparse failures don't blame bpy
     import mathutils  # noqa: F401
+
+    # Disable problematic third-party addons (Valve Source Tools' depsgraph
+    # handler crashes on factory-reset scenes). Best-effort.
+    _disable_noisy_addons()
 
     # Clean slate. Removes ALL default objects/cameras/lights/etc.
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -147,16 +177,48 @@ def main():
     mesh_armature = mesh_armatures[0]
     print(f"  mesh armature: {mesh_armature.name}  bones={len(mesh_armature.data.bones)}")
 
+    # Compute mesh bounding box so the camera setup can frame it. Granny
+    # files don't normalize world units; Hades II's Mel is at roughly
+    # 100-180 units tall ("100" in the GR2 unit-meter field would mean
+    # the mesh thinks it's 100 cm = 1 m, but Blender treats it as meters
+    # which makes it tiny). Auto-frame compensates.
+    mesh_objs = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+    if mesh_objs:
+        from mathutils import Vector
+        min_v = Vector((float('inf'),) * 3)
+        max_v = Vector((float('-inf'),) * 3)
+        for obj in mesh_objs:
+            for corner in obj.bound_box:
+                world = obj.matrix_world @ Vector(corner)
+                min_v.x = min(min_v.x, world.x); max_v.x = max(max_v.x, world.x)
+                min_v.y = min(min_v.y, world.y); max_v.y = max(max_v.y, world.y)
+                min_v.z = min(min_v.z, world.z); max_v.z = max(max_v.z, world.z)
+        bbox_size = max_v - min_v
+        bbox_center = (min_v + max_v) * 0.5
+        print(f"  mesh bbox: min={tuple(round(v,2) for v in min_v)} max={tuple(round(v,2) for v in max_v)}")
+        print(f"  bbox size={tuple(round(v,2) for v in bbox_size)} center={tuple(round(v,2) for v in bbox_center)}")
+
+        # If the user left the default ortho-scale and target-z, auto-size
+        # to fit the mesh height with 10% margin.
+        if args.ortho_scale == 2.5 and args.target_z == 1.0:
+            args.ortho_scale = max(bbox_size.x, bbox_size.z) * 1.1
+            args.target_z = bbox_center.z
+            args.distance = max(args.distance, max(bbox_size.x, bbox_size.y, bbox_size.z) * 2.0)
+            print(f"  auto-framed: ortho-scale={args.ortho_scale:.2f}  target-z={args.target_z:.2f}  distance={args.distance:.2f}")
+
     print(f"Loading animation: {args.anim}")
     _import_glb(args.anim)
     all_armatures = _find_armatures(bpy)
     new_armatures = [a for a in all_armatures if a is not mesh_armature]
     if new_armatures:
         anim_armature = new_armatures[-1]
-        if _transfer_action_to(mesh_armature, anim_armature):
-            print(f"  transferred action from {anim_armature.name} -> {mesh_armature.name}")
+        anim_armature_name = anim_armature.name  # capture before _transfer_action_to deletes it
+        result = _transfer_action_to(mesh_armature, anim_armature)
+        if result is not None:
+            action_name, source_name = result
+            print(f"  transferred action {action_name!r} from {source_name} -> {mesh_armature.name}")
         else:
-            print(f"  warning: animation armature {anim_armature.name} had no action")
+            print(f"  warning: animation armature {anim_armature_name} had no action")
     else:
         # No new armature created — the importer might have merged the
         # action onto the existing armature already, or this glb has no
