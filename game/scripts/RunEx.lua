@@ -43,6 +43,27 @@ function RunEx.IsPrebossRoomName(name)
     return name == "A_PreBoss01" or name == "B_PreBoss01" or name == "C_PreBoss01"
 end
 
+---@return boolean
+---True for biome boss rooms (Tartarus A_Boss01-03 = Furies, Asphodel
+---B_Boss01-02 = Hydra variants, Elysium C_Boss01 = Theseus + Asterius).
+---Final-boss D_Boss01 is excluded — the run ends there, no "next room"
+---to revive in.
+function RunEx.IsBossRoomName(name)
+    return name == "A_Boss01" or name == "A_Boss02" or name == "A_Boss03"
+        or name == "B_Boss01" or name == "B_Boss02"
+        or name == "C_Boss01"
+end
+
+---@return boolean
+---True for any boss-equivalent room — biome bosses above, plus any room
+---flagged `IsMiniBossRoom` in RoomData (rare-spawn mini-boss encounters
+---scattered through Tartarus / Asphodel / Elysium / Styx).
+function RunEx.IsAnyBossRoom(room)
+    if not room then return false end
+    if room.IsMiniBossRoom then return true end
+    return RunEx.IsBossRoomName(room.Name)
+end
+
 function RunEx.IsDoorSpecial(door)
     -- chaos door or chall aenge room
     return door.OnUsedPresentationFunctionName == "SecretDoorUsedPresentation" or

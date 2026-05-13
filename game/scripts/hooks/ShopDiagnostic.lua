@@ -2,14 +2,27 @@
 -- Copyright (c) Uladzislau Nikalayevich <thenormalnij@gmail.com>. All rights reserved.
 -- Licensed under the MIT license. See LICENSE file in the project root for details.
 --
--- TEMPORARY diagnostic for the Charon shop "only 1-2 items" bug. Wraps
--- the three vanilla shop functions and logs counts at each stage so we
--- can tell whether the cut happens during generation (RunShopGeneration /
--- FillInShopOptions producing few options) or during spawning
--- (SpawnStoreItemsInWorld silent-skipping due to missing LootPoints).
+-- Charon shop fix + diagnostic.
 --
--- Remove the ModRequire in GamemodeInit.lua and delete this file once
--- the bug is diagnosed.
+-- Bug: on first entry to a Charon shop, only 1-2 items spawn in the world
+-- instead of the full 3-6. On exiting and re-entering the same shop, the
+-- missing items appear. Save-reload also "fixes" it.
+--
+-- Cause: vanilla `SpawnStoreItemsInWorld` (StoreScripts.lua:396) iterates
+-- `StoreOptions` and only spawns when there's a matching `LootPoint`
+-- obstacle at that index. The check `if kitIds[index] ~= nil then ...`
+-- silent-skips otherwise. On first entry the call fires before all
+-- `LootPoint` obstacles have registered, so most items get skipped. On
+-- re-entry the room is fully loaded and the call finds every LootPoint.
+--
+-- Fix: poll `#kitIds` against `#StoreOptions` and defer the spawn call
+-- until they match (or until a 2s timeout, just in case). If they already
+-- match when the engine first calls in, vanilla runs synchronously — no
+-- delay in the common case where the bug doesn't apply.
+--
+-- The diagnostic DebugPrints would tell us the exact counts to confirm,
+-- but on this build DebugPrint output isn't reaching Hades.log. Kept the
+-- prints anyway in case logging works on a future Hades build.
 --
 
 ---@type HookUtils
@@ -26,54 +39,85 @@ local function countTable(t)
     return n
 end
 
+---@private
+---Wait up to maxWait seconds for the room to have at least optionsCount
+---LootPoint obstacles registered. Returns the final kitIds list.
+local function waitForLootPoints(optionsCount, maxWait)
+    local checkInterval = 0.05
+    local elapsed = 0
+    local kitIds = GetIdsByType({ Name = "LootPoint" })
+    while #kitIds < optionsCount and elapsed < maxWait do
+        wait(checkInterval)
+        elapsed = elapsed + checkInterval
+        kitIds = GetIdsByType({ Name = "LootPoint" })
+    end
+    return kitIds, elapsed
+end
+
 function ShopDiagnostic.InitHooks()
-    -- RunShopGeneration: called once per room transition at RoomManager.lua:5089.
-    -- After it returns, roomData.Store.StoreOptions should be populated.
+    -- RunShopGeneration / FillInShopOptions: pure diagnostic. If
+    -- DebugPrint output ever surfaces, these reveal which stage of the
+    -- store-options pipeline produced the count we observe in the spawn
+    -- wrapper. They run synchronously and don't affect behavior.
     HookUtils.wrap("RunShopGeneration", function(baseFun, roomData)
         DebugPrint { Text = "TN_Coop ShopDiag RunShopGeneration entry"
             .. " roomName=" .. tostring(roomData and roomData.Name)
             .. " ChosenRewardType=" .. tostring(roomData and roomData.ChosenRewardType)
-            .. " storeNil=" .. tostring(roomData and roomData.Store == nil)
         }
         baseFun(roomData)
-        local store = roomData and roomData.Store
-        local options = store and store.StoreOptions
         DebugPrint { Text = "TN_Coop ShopDiag RunShopGeneration exit"
-            .. " roomName=" .. tostring(roomData and roomData.Name)
-            .. " storeNil=" .. tostring(store == nil)
-            .. " optionsCount=" .. tostring(countTable(options))
+            .. " optionsCount=" .. tostring(countTable(roomData and roomData.Store and roomData.Store.StoreOptions))
         }
     end)
 
-    -- FillInShopOptions: called by RunShopGeneration. The actual filter
-    -- pipeline (Traits, Consumables, Cosmetic, Healing). Log its result.
     HookUtils.wrap("FillInShopOptions", function(baseFun, args)
         local result = baseFun(args)
         DebugPrint { Text = "TN_Coop ShopDiag FillInShopOptions exit"
             .. " roomName=" .. tostring(args and args.RoomName)
-            .. " storeDataKind=" .. tostring(args and args.StoreData and args.StoreData.RewardType or "n/a")
             .. " optionsCount=" .. tostring(countTable(result and result.StoreOptions))
         }
         return result
     end)
 
-    -- SpawnStoreItemsInWorld: called when the shop event fires after the
-    -- room is fully entered. Compares #kitIds (LootPoints registered) to
-    -- #StoreOptions (items to spawn). The silent-skip lives here at
-    -- StoreScripts.lua:412 - "if kitIds[index] ~= nil then spawn else skip".
+    -- SpawnStoreItemsInWorld: fix + diagnostic. If kitIds already matches
+    -- #StoreOptions when the engine calls in (normal case once LootPoints
+    -- are all registered), defer to vanilla synchronously. Otherwise
+    -- spawn a thread that polls until kitIds catches up, then runs
+    -- vanilla — this is what fixes the "first entry shows 1-2 items" bug.
     HookUtils.wrap("SpawnStoreItemsInWorld", function(baseFun)
-        local kitIds = GetIdsByType({ Name = "LootPoint" })
         local store = CurrentRun and CurrentRun.CurrentRoom and CurrentRun.CurrentRoom.Store
-        local options = store and store.StoreOptions
+        local optionsCount = countTable(store and store.StoreOptions)
+        local kitIds = GetIdsByType({ Name = "LootPoint" })
+
         DebugPrint { Text = "TN_Coop ShopDiag SpawnStoreItemsInWorld entry"
-            .. " kitIdsCount=" .. tostring(#(kitIds or {}))
-            .. " optionsCount=" .. tostring(countTable(options))
+            .. " kitIdsCount=" .. tostring(#kitIds)
+            .. " optionsCount=" .. tostring(optionsCount)
         }
-        baseFun()
-        local spawnedAfter = store and store.SpawnedStoreItems
-        DebugPrint { Text = "TN_Coop ShopDiag SpawnStoreItemsInWorld exit"
-            .. " spawnedCount=" .. tostring(countTable(spawnedAfter))
-        }
+
+        if #kitIds >= optionsCount or optionsCount == 0 then
+            -- Common case: room is ready, no deferral needed.
+            baseFun()
+            DebugPrint { Text = "TN_Coop ShopDiag SpawnStoreItemsInWorld done sync"
+                .. " spawnedCount=" .. tostring(countTable(store and store.SpawnedStoreItems))
+            }
+            return
+        end
+
+        -- Defer until LootPoints catch up. The thread captures the
+        -- closure scope; on resume it re-checks kitIds, calls vanilla
+        -- once it's ready (or after a 2s safety timeout).
+        thread(function()
+            local finalKitIds, elapsed = waitForLootPoints(optionsCount, 2.0)
+            DebugPrint { Text = "TN_Coop ShopDiag SpawnStoreItemsInWorld deferred run"
+                .. " elapsed=" .. tostring(elapsed)
+                .. " kitIdsCount=" .. tostring(#finalKitIds)
+                .. " optionsCount=" .. tostring(optionsCount)
+            }
+            baseFun()
+            DebugPrint { Text = "TN_Coop ShopDiag SpawnStoreItemsInWorld done deferred"
+                .. " spawnedCount=" .. tostring(countTable(store and store.SpawnedStoreItems))
+            }
+        end)
     end)
 end
 

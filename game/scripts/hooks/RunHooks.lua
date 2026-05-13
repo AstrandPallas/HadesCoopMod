@@ -23,6 +23,10 @@ local SecondPlayerUi = ModRequire "../SecondPlayerUI.lua"
 local RunEx = ModRequire "../RunEx.lua"
 ---@type PlayerVisibilityHelper
 local PlayerVisibilityHelper = ModRequire "../PlayerVisibilityHelper.lua"
+---@type CoopPlayerLabels
+local CoopPlayerLabels = ModRequire "../CoopPlayerLabels.lua"
+---@type CoopPlayerUi
+local CoopPlayerUi = ModRequire "../CoopPlayerUi.lua"
 ---@type HeroEx
 local HeroEx = ModRequire "../HeroEx.lua"
 ---@type CoopControl
@@ -118,6 +122,41 @@ function RunHooks.HandleGenericRoom(StartRoomFun, run, currentRoom)
         local entranceFunction = _G[roomEntranceFunctionName]
         --entranceFunction(currentRun, currentRoom, args)
         -- TODO ADD ENTER Animation
+
+        -- Post-boss revive: if the room we just left was any boss-tier
+        -- encounter (biome boss = Furies / Hydra / Theseus, or any
+        -- mini-boss room flagged IsMiniBossRoom in RoomData), revive
+        -- every dead hero to full HP before the InitCoopUnit loop runs.
+        -- The loop only spawns world units for not-dead heroes, so
+        -- flipping IsDead first is what makes the revived players
+        -- physically appear in the next room.
+        --
+        -- Capture an "anchor" hero BEFORE flipping IsDead so the post-
+        -- positioning teleport has a valid living target. Can't just
+        -- use P1 — if P1 was the one who died (and the run is carrying
+        -- on with P3 as the active hero), P1's unit doesn't exist.
+        -- Any pre-revive alive hero is a safe teleport target since
+        -- they walked through the door themselves.
+        local roomHistory = CurrentRun and CurrentRun.RoomHistory
+        local prevRoom = roomHistory and roomHistory[#roomHistory]
+        local revivedPlayerIds = {}
+        local anchorHero = nil
+        if RunEx.IsAnyBossRoom(prevRoom) then
+            anchorHero = CoopPlayers.GetFirstAliveHero()
+            for playerId, hero in CoopPlayers.PlayersIterator() do
+                if hero and hero.IsDead then
+                    hero.IsDead = false
+                    if hero.MaxHealth and hero.MaxHealth > 0 then
+                        hero.Health = hero.MaxHealth
+                    else
+                        hero.MaxHealth = 50
+                        hero.Health = 50
+                    end
+                    table.insert(revivedPlayerIds, playerId)
+                end
+            end
+        end
+
         for playerId = 2, CoopPlayers.GetPlayersCount() do
             local hero = CoopPlayers.GetHero(playerId)
             if not hero or (hero and not hero.IsDead) then
@@ -128,6 +167,13 @@ function RunHooks.HandleGenericRoom(StartRoomFun, run, currentRoom)
         SecondPlayerUi.Refresh()
 
         CoopPlayers.UpdateMainHero()
+
+        -- Re-spawn floating P# labels now that each player's hero.ObjectId
+        -- points at the new room's freshly-spawned unit. Our StartRoom
+        -- hook fires earlier than this and would attach to the previous
+        -- room's destroyed unit IDs (leaving the labels as invisible
+        -- orphans for P2-P4), so refresh here too.
+        CoopPlayerLabels.RefreshAll()
 
         local mainHero = CoopPlayers.GetMainHero()
         local isMainPlayerDead = mainHero and mainHero.IsDead
@@ -144,6 +190,95 @@ function RunHooks.HandleGenericRoom(StartRoomFun, run, currentRoom)
                     if isMainPlayerDead then
                         RemoveInputBlock{ PlayerIndex = playerId, Name = "MoveHeroToRoomPosition" }
                     end
+                end
+            end
+        end
+
+        -- Revived heroes need extra handholding the regular room-entry
+        -- flow doesn't cover:
+        --   1. CoopCreatePlayerUnit places the new world unit at the
+        --      slot's last known position — which was wherever the hero
+        --      died in the previous room. Teleport them to anchorHero
+        --      (any pre-revive alive hero — captured above before we
+        --      flipped IsDead so we don't accidentally teleport a
+        --      revived hero to themselves).
+        --   2. The HUD dispatcher (UIHooks.ShowHealthUI) already ran
+        --      with these heroes flagged IsDead, so their bar/ammo/
+        --      super UI was skipped. Call the per-instance Show*
+        --      methods now under each revived hero's context to fill
+        --      in the placeholder text and re-create their HUD elements.
+        if #revivedPlayerIds > 0 and anchorHero and anchorHero.ObjectId then
+            for _, playerId in ipairs(revivedPlayerIds) do
+                local hero = CoopPlayers.GetHero(playerId)
+                if hero and hero.ObjectId then
+                    -- Teleport synchronously — needs to happen before the
+                    -- player sees the revived hero anywhere.
+                    Teleport({ Id = hero.ObjectId, DestinationId = anchorHero.ObjectId })
+
+                    -- Defer the HUD revive in a thread. The engine's
+                    -- weapon-equip path is partially threaded — by the
+                    -- time the synchronous part of InitCoopUnit returns,
+                    -- GetWeaponProperty { WeaponName = "RangedWeapon" }
+                    -- still returns nil for a few ticks. Show*UI's built-in
+                    -- threaded Update fires next tick, which is too early.
+                    -- Poll for the cast ammo to become queryable, then run
+                    -- the full destroy+show cycle so the text-box rebinds
+                    -- its LuaValue against real data.
+                    thread(function()
+                        local maxWait = 3.0
+                        local elapsed = 0
+                        while elapsed < maxWait do
+                            local ammo = GetWeaponProperty {
+                                Id = hero.ObjectId,
+                                WeaponName = "RangedWeapon",
+                                Property = "Ammo",
+                            }
+                            if ammo ~= nil then break end
+                            wait(0.05)
+                            elapsed = elapsed + 0.05
+                        end
+
+                        if elapsed >= maxWait then
+                            -- Engine equip never completed within the budget.
+                            -- Force the equip ourselves so the HUD has data
+                            -- to bind against and the player can actually use
+                            -- their cast in this room.
+                            EquipWeapon { Name = "RangedWeapon", DestinationId = hero.ObjectId }
+                        end
+
+                        HeroContext.RunWithHeroContext(hero, function()
+                            -- Destroy before Show: the HUD obstacles often
+                            -- survive death (HideAmmoUI's dispatcher doesn't
+                            -- cover P3+). With the obstacle intact, Show*UI
+                            -- early-returns and the placeholder LuaValue
+                            -- persists. Destroying first forces the full
+                            -- create path.
+                            if playerId == 2 then
+                                SecondPlayerUi.DestroyHealthUI()
+                                SecondPlayerUi.ShowHealthUI()
+                                SecondPlayerUi.DestroyAmmoUI()
+                                SecondPlayerUi.ShowAmmoUI()
+                                SecondPlayerUi.ShowSuperMeter()
+                                if hero.Weapons and hero.Weapons.GunWeapon then
+                                    SecondPlayerUi.DestroyGunUI()
+                                    SecondPlayerUi.ShowGunUI()
+                                end
+                            else
+                                local ui = CoopPlayerUi.Get(playerId)
+                                if ui then
+                                    ui:DestroyHealthUI()
+                                    ui:ShowHealthUI()
+                                    ui:DestroyAmmoUI()
+                                    ui:ShowAmmoUI()
+                                    ui:ShowSuperMeter()
+                                    if hero.Weapons and hero.Weapons.GunWeapon then
+                                        ui:DestroyGunUI()
+                                        ui:ShowGunUI()
+                                    end
+                                end
+                            end
+                        end)
+                    end)
                 end
             end
         end
