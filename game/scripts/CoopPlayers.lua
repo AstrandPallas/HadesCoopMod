@@ -189,6 +189,7 @@ function CoopPlayers.InitCoopUnit(playerId)
     end
 
     local hero = CoopPlayers.CoopHeroes[playerId]
+    local isFresh = false
     if not hero then
         hero = HeroEx.CreateFreshHero{
             keepsake = GameState.LastAwardTrait;
@@ -196,6 +197,7 @@ function CoopPlayers.InitCoopUnit(playerId)
             weaponName = WeaponSets.HeroMeleeWeapons[1];
             weaponVariant = 1;
         }
+        isFresh = true
     end
 
     DebugPrint { Text = "Create hero for player " .. tostring(playerId) }
@@ -206,7 +208,26 @@ function CoopPlayers.InitCoopUnit(playerId)
 
     PlayerVisibilityHelper.AddPlayerMarkers(playerId, unit)
 
-    HeroContext.RunWithHeroContext(hero, GameModifed.SetupAdditional, CurrentRun, nil, hero, unit)
+    -- For a freshly-created hero, pass `true` for applyLuaUpgrades so the
+    -- Lua-side meta upgrade effects (AddOutgoingDamageModifiers, LuaProperty
+    -- PropertyChanges like HealthMetaUpgrade's MaxHealth bump, etc.) actually
+    -- apply. Without this, mirror upgrades that ONLY add damage modifiers
+    -- (Shadow/Fiery Presence, Boiling Blood, First Blood, etc.) have zero
+    -- effect on P2-P4 because UpgradeManager.lua:468/151 gate the Lua-side
+    -- application behind this flag.
+    --
+    -- For a SAVED hero, pass `nil` so we don't re-bump LuaProperty values that
+    -- were already applied (and persisted) at fresh creation. Re-applying with
+    -- `true` on every save load would double MaxHealth, double damage mods, etc.
+    local applyLuaUpgrades = isFresh and true or nil
+    HeroContext.RunWithHeroContext(hero, GameModifed.SetupAdditional, CurrentRun, applyLuaUpgrades, hero, unit)
+
+    -- SetupAdditional has now bumped MaxHealth via HealthMetaUpgrade (for fresh
+    -- heroes). Snap Health to the new MaxHealth so the player spawns at full HP.
+    -- Skip for saved heroes — keep their saved HP intact.
+    if isFresh then
+        hero.Health = hero.MaxHealth
+    end
 
     SetUntargetable { Id = hero.ObjectId }
     -- Disables bow arrow bounces

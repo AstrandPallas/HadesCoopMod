@@ -99,11 +99,16 @@ function HeroEx.CreateFreshHero(args)
 
         EquipWeaponUpgrade(hero, { SkipTraitHighlight = true })
         InitHeroLastStands(hero)
-
-        hero.MaxHealth = hero.MaxHealth +
-        GetNumMetaUpgrades("HealthMetaUpgrade") * MetaUpgradeData.HealthMetaUpgrade.ChangeValue
-        hero.Health = hero.MaxHealth
     end)
+
+    -- HealthMetaUpgrade was historically applied manually here because the
+    -- old InitCoopUnit -> SetupAdditional path passed `applyLuaUpgrades = nil`,
+    -- which made vanilla `ApplyMetaUpgrades` skip the LuaProperty MaxHealth
+    -- bump. That flag now passes `true` for fresh heroes (see CoopPlayers.lua
+    -- InitCoopUnit), so ApplyMetaUpgrades applies HealthMetaUpgrade itself --
+    -- and along with it every other mirror upgrade's Lua-side effects. The
+    -- caller in InitCoopUnit sets Health = MaxHealth after SetupAdditional so
+    -- fresh players spawn at full HP.
 
     return hero
 end
