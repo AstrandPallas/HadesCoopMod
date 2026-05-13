@@ -14,7 +14,11 @@
 ---@class PerfCounters
 local PerfCounters = {}
 
-PerfCounters.Enabled = true
+-- Off by default — DebugPrint output doesn't reach Hades.log on the live
+-- build, so leaving this on burns cycles for nothing. Flip to `true` when
+-- actively investigating a perf regression AND you've confirmed log output
+-- is reaching disk.
+PerfCounters.Enabled = false
 PerfCounters.ReportInterval = 5  -- seconds between log dumps
 
 ---@private

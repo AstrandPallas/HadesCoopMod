@@ -69,6 +69,16 @@ end
 ---@param fun function
 ---@param ... unknown params
 function HeroContext.RunWithHeroContext(hero, fun, ...)
+    -- Fast path: when the current thread already resolves to `hero`, the
+    -- wrap is semantically a no-op. GetCurrentHeroContext returns the same
+    -- value either way, so spawning a coroutine to "set" it is pure waste.
+    -- Skips coroutine allocation in dense combat where OnHit /
+    -- OnProjectileDeath / OnEffectApply can fire 100+/sec with DoT stacks.
+    if HeroContext.GetCurrentHeroContext() == hero then
+        fun(...)
+        return
+    end
+
     local args = {...}
     local co = coroutine_create(function()
         fun(table.unpack(args))
@@ -97,6 +107,14 @@ local awaitableThreadId = 0
 ---@param fun function
 ---@param ... unknown params
 function HeroContext.RunWithHeroContextAwait(hero, fun, ...)
+    -- Same fast path as RunWithHeroContext: when the current thread's
+    -- context already matches, no coroutine wrap is needed. The synchronous
+    -- call also implicitly "awaits" since fun returns before this returns.
+    if HeroContext.GetCurrentHeroContext() == hero then
+        fun(...)
+        return
+    end
+
     awaitableThreadId = awaitableThreadId + 1
     local notifyName = "RunWithHeroContextAwait" .. awaitableThreadId
 
