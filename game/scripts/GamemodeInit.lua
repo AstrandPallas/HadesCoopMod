@@ -48,7 +48,8 @@ local ShopDiagnostic = ModRequire "hooks/ShopDiagnostic.lua"  -- TEMP diagnostic
 ---@type ILootDelivery
 local LootDelivery = ModRequire "loot/LootInterface.lua"
 
-ModRequire "hooks/DamageHooks.lua"
+---@type DamageHooks
+local DamageHooks = ModRequire "hooks/DamageHooks.lua"
 ModRequire "hooks/UseHooks.lua"
 ModRequire "hooks/ControlHooks.lua"
 ModRequire "hooks/WeaponHooks.lua"
@@ -83,6 +84,11 @@ local function TryInstalBasicHooks()
     FoodHooks.InitHooks()
     LootDelivery.InitHooks()
     CoopPlayerLabels.InitHooks()
+    -- Late-bound vanilla Lua function wraps (Damage / CharmApply /
+    -- HitByFreezeWeapon). Module-level wrap attempts on these fail
+    -- because they aren't in _G yet at mod-module-load time; called
+    -- here on OnPreThingCreation when they're resolvable.
+    DamageHooks.InitHooks()
 end
 
 OnPreThingCreation

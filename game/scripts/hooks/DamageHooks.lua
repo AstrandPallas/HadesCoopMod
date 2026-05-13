@@ -20,6 +20,9 @@ local Config = ModRequire "../config.lua"
 ---@type PerfCounters
 local PerfCounters = ModRequire "../PerfCounters.lua"
 
+---@class DamageHooks
+local DamageHooks = {}
+
 local _OnHit = OnHit
 function OnHit(args)
     -- Only one usage
@@ -170,15 +173,46 @@ HookUtils.wrap("OnEffectApply", function(baseFunc, args)
     }
 end)
 
--- Charm: vanilla CharmApply is wired as the OnApplyFunctionName for
--- Aphrodite's charm weapon data (WeaponData.lua:17054). When the function
--- IS resolvable as a Lua global at mod-load time, wrap it so a player
--- charming a teammate can't toggle .Charmed / outgoing-damage multiplier.
--- On builds where CharmApply isn't in _G at load (engine-resolved
--- OnApplyFunctionName, or load-order quirk), the OnEffectApply
--- ClearEffect above is the only defense — which is fine, that's the
--- primary mechanism. Skip silently rather than abort mod load.
-if _G.CharmApply then
+HeroContextWrapper.WrapTriggerHero("OnEffectCleared", "TriggeredByTable")
+HeroContextWrapper.WrapTriggerHero("OnEffectStackDecrease", "TriggeredByTable")
+HeroContextWrapper.WrapTriggerHero("OnEffectDelayedKnockbackForce", "TriggeredByTable")
+
+-- Late-bound friendly-fire guards. These wrap vanilla Lua functions
+-- (Combat.lua:Damage / CharmApply / HitByFreezeWeapon) that aren't in
+-- _G at mod-module-load time on this Hades build — only engine-bound
+-- globals like OnHit / OnEffectApply are resolvable that early. Calling
+-- HookUtils.wrap on a vanilla Lua function at module load errors out
+-- with "Cannot wrap function: <name>" and aborts mod init.
+--
+-- TryInstalBasicHooks (GamemodeInit.lua) runs on OnPreThingCreation,
+-- which fires after vanilla scripts have loaded — by then the targets
+-- are resolvable. Install these wraps from InitHooks() to match the
+-- pattern other mod modules use (EnemyAiHooks.InitHooks, etc.).
+function DamageHooks.InitHooks()
+    -- Vanilla Damage() branches on `victim == CurrentRun.Hero`, routing
+    -- anyone NOT equal to the default hero (i.e., P2/P3/P4) through
+    -- DamageEnemy as if they were a hostile. The existing OnHit /
+    -- OnProjectileDeath PvP guards short-circuit most code paths
+    -- upstream, but a few weapon damage paths (notably the shield throw
+    -- in the training room) reach Damage() directly without firing those
+    -- triggers. If both attacker and victim are players — and not the
+    -- same hero (self-damage from Doom DoTs must still apply) — drop
+    -- the call entirely.
+    HookUtils.wrap("Damage", function(baseFun, victim, triggerArgs)
+        if victim and triggerArgs and triggerArgs.AttackerTable
+            and triggerArgs.AttackerTable ~= victim
+            and CoopPlayers.IsPlayerHero(triggerArgs.AttackerTable)
+            and CoopPlayers.IsPlayerHero(victim)
+        then
+            return
+        end
+        return baseFun(victim, triggerArgs)
+    end)
+
+    -- Charm: CharmApply (Combat.lua:3623) is wired as OnApplyFunctionName
+    -- for Aphrodite's charm weapon data. Block player-on-player charm so
+    -- a teammate can't get .Charmed = true and the outgoing-damage
+    -- multiplier flip.
     HookUtils.wrap("CharmApply", function(baseFun, triggerArgs)
         local victim = triggerArgs and triggerArgs.TriggeredByTable
         local attacker = triggerArgs and triggerArgs.AttackerTable
@@ -191,17 +225,13 @@ if _G.CharmApply then
         end
         return baseFun(triggerArgs)
     end)
-end
 
--- Freeze: vanilla HitByFreezeWeapon(victim) sets victim.Frozen = true and
--- spawns FreezeEscape, which only listens for control input when
--- `victim == CurrentRun.Hero` (Combat.lua:3827). Any other player who
--- gets frozen relies on the enemy-style 0.5s auto-attempt timer, which
--- feels broken next to P1's mash-to-escape behavior. Drop the call for
--- any non-main player hero so freeze stays a P1-only mechanic. Same
--- _G existence check as CharmApply in case this function isn't
--- resolvable at load on a given build.
-if _G.HitByFreezeWeapon then
+    -- Freeze: HitByFreezeWeapon (Combat.lua:3790) sets victim.Frozen =
+    -- true and spawns FreezeEscape, which only listens for control input
+    -- when victim == CurrentRun.Hero (Combat.lua:3827). Any non-main
+    -- player who gets frozen relies on the enemy-style 0.5s auto-attempt
+    -- timer instead, which feels broken. Drop the call for any non-main
+    -- player hero so freeze stays a P1-only mechanic.
     HookUtils.wrap("HitByFreezeWeapon", function(baseFun, victim)
         if victim and CoopPlayers.IsPlayerHero(victim)
             and victim ~= CoopPlayers.GetMainHero()
@@ -212,26 +242,4 @@ if _G.HitByFreezeWeapon then
     end)
 end
 
-HeroContextWrapper.WrapTriggerHero("OnEffectCleared", "TriggeredByTable")
-HeroContextWrapper.WrapTriggerHero("OnEffectStackDecrease", "TriggeredByTable")
-HeroContextWrapper.WrapTriggerHero("OnEffectDelayedKnockbackForce", "TriggeredByTable")
-
--- Vanilla Combat.lua:Damage() branches on `victim == CurrentRun.Hero`,
--- routing anyone NOT equal to the default hero (i.e., P2/P3/P4) through
--- DamageEnemy as if they were a hostile. The existing OnHit / OnProjectileDeath
--- PvP guards short-circuit most code paths upstream, but a few weapon
--- damage paths (notably the shield throw observed in the training room)
--- reach Damage() directly without firing those triggers. Wrap Damage()
--- as a last line of defense: if both attacker and victim are players —
--- and they aren't the same hero (self-damage from Doom DoTs etc. must
--- still apply) — drop the call entirely.
-HookUtils.wrap("Damage", function(baseFun, victim, triggerArgs)
-    if victim and triggerArgs and triggerArgs.AttackerTable
-        and triggerArgs.AttackerTable ~= victim
-        and CoopPlayers.IsPlayerHero(triggerArgs.AttackerTable)
-        and CoopPlayers.IsPlayerHero(victim)
-    then
-        return
-    end
-    return baseFun(victim, triggerArgs)
-end)
+return DamageHooks
