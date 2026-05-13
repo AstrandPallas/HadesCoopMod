@@ -823,6 +823,47 @@ def cmd_merge(args):
     return 0
 
 
+def cmd_unpack_all(args):
+    """Unpack every entry from a .gpk and merge each with its .sdb into a
+    standalone .gr2 in the output directory. One-shot for getting at all
+    of a character's meshes + animations in a viewable form."""
+    gpk_path = Path(args.gpk)
+    sdb_path = Path(args.sdb)
+    if not gpk_path.is_file():
+        sys.stderr.write(f"error: {gpk_path}: not a file\n")
+        return 1
+    if not sdb_path.is_file():
+        sys.stderr.write(f"error: {sdb_path}: not a file\n")
+        return 1
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    sdb = parse_sdb_string_table(sdb_path)
+    print(f"SDB string table: {len(sdb)} entries")
+    print(f"Unpacking {gpk_path.name} -> {out_dir}/ (standalone .gr2 per entry)")
+
+    ok = 0
+    failed = 0
+    for name, raw_entry in parse_gpk(gpk_path):
+        if not has_granny_magic(raw_entry):
+            sys.stderr.write(f"  skip {name}: not Granny magic\n")
+            failed += 1
+            continue
+        safe = name.replace("/", "_").replace("\\", "_")
+        out_path = out_dir / f"{safe}.gr2"
+        try:
+            merged = merge_gpk_entry(raw_entry, sdb)
+            out_path.write_bytes(merged)
+            ok += 1
+            if args.verbose:
+                print(f"  ok    {name}  ({len(merged):,}B)")
+        except Exception as exc:
+            sys.stderr.write(f"  FAIL  {name}: {exc}\n")
+            failed += 1
+    print(f"\nDone. {ok} merged, {failed} failed/skipped.")
+    return 0 if failed == 0 else 1
+
+
 def cmd_inspect(args):
     """Diagnostic: load one extracted GPK entry, run the type walker, and
     report counts. Useful for verifying Phase 3 against the gist's expected
@@ -1039,6 +1080,17 @@ def main():
         "-o", "--output", required=True, help="Output .gr2 path"
     )
     merge.set_defaults(func=cmd_merge)
+
+    bulk = sub.add_parser(
+        "unpack-all",
+        help="Unpack every entry from a .gpk and merge each with its .sdb "
+        "into standalone .gr2 files in the output directory (one-shot).",
+    )
+    bulk.add_argument("gpk", help="Path to the .gpk file")
+    bulk.add_argument("sdb", help="Path to the sibling .sdb file")
+    bulk.add_argument("-o", "--output", default="unpacked-gr2", help="Output directory")
+    bulk.add_argument("-v", "--verbose", action="store_true", help="Print each entry")
+    bulk.set_defaults(func=cmd_unpack_all)
 
     args = p.parse_args()
     return args.func(args)
