@@ -150,3 +150,23 @@ end)
 HeroContextWrapper.WrapTriggerHero("OnEffectCleared", "TriggeredByTable")
 HeroContextWrapper.WrapTriggerHero("OnEffectStackDecrease", "TriggeredByTable")
 HeroContextWrapper.WrapTriggerHero("OnEffectDelayedKnockbackForce", "TriggeredByTable")
+
+-- Vanilla Combat.lua:Damage() branches on `victim == CurrentRun.Hero`,
+-- routing anyone NOT equal to the default hero (i.e., P2/P3/P4) through
+-- DamageEnemy as if they were a hostile. The existing OnHit / OnProjectileDeath
+-- PvP guards short-circuit most code paths upstream, but a few weapon
+-- damage paths (notably the shield throw observed in the training room)
+-- reach Damage() directly without firing those triggers. Wrap Damage()
+-- as a last line of defense: if both attacker and victim are players —
+-- and they aren't the same hero (self-damage from Doom DoTs etc. must
+-- still apply) — drop the call entirely.
+HookUtils.wrap("Damage", function(baseFun, victim, triggerArgs)
+    if victim and triggerArgs and triggerArgs.AttackerTable
+        and triggerArgs.AttackerTable ~= victim
+        and CoopPlayers.IsPlayerHero(triggerArgs.AttackerTable)
+        and CoopPlayers.IsPlayerHero(victim)
+    then
+        return
+    end
+    return baseFun(victim, triggerArgs)
+end)
