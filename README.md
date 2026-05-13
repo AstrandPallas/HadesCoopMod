@@ -2,7 +2,7 @@
 # Hades coop mod
 
 Play Hades with a friend!
-This mod adds local cooperative multiplayer to Hades, allowing two players to fight through the Underworld together on the same PC.
+This mod adds local cooperative multiplayer to Hades, allowing four players to fight through the Underworld together on the same PC.
 
 For online play: Use a streaming tool like [Parsec](https://parsec.app/) to share your game session with a remote friend.
 
