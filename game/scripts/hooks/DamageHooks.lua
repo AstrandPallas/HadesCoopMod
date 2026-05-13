@@ -130,7 +130,30 @@ HookUtils.wrap("OnEffectApply", function(baseFunc, args)
     baseFunc{
         function(triggerArgs)
             PerfCounters.Tick("OnEffectApply")
+
             local target = triggerArgs.TriggeredByTable
+            local attacker = triggerArgs.AttackerTable
+
+            -- Friendly-fire status effect block. Vanilla's
+            -- ApplyEffectFromWeapon/Projectile is engine-side and lands
+            -- the effect on the victim BEFORE Damage() runs (and entirely
+            -- separately from it when the effect is a pure status — Chill,
+            -- Doom, Hangover, Weak, Jolted, Charm). The Damage() wrap
+            -- can't see those. This is the first Lua-visible hook after
+            -- the engine application: ClearEffect the just-applied stack
+            -- and short-circuit so any OnApply callback / scheduled DoT
+            -- tick doesn't run.
+            if target and attacker
+                and CoopPlayers.IsPlayerHero(target)
+                and CoopPlayers.IsPlayerHero(attacker)
+                and attacker ~= target
+            then
+                if triggerArgs.EffectName and target.ObjectId then
+                    ClearEffect({ Id = target.ObjectId, Name = triggerArgs.EffectName })
+                end
+                return
+            end
+
             if CoopPlayers.IsPlayerHero(target) then
                 HeroContext.RunWithHeroContext(target, originalHandler, triggerArgs)
             elseif target and target.CoopLastAttackerId then
@@ -145,6 +168,43 @@ HookUtils.wrap("OnEffectApply", function(baseFunc, args)
             end
         end
     }
+end)
+
+-- Charm: vanilla CharmApply is wired as the OnApplyFunctionName for
+-- Aphrodite's charm weapon data (WeaponData.lua:17054), so the engine
+-- calls it directly on effect application. The OnEffectApply wrap above
+-- catches generic effect handlers, but the engine-side OnApplyFunction
+-- runs on its own code path — wrap CharmApply explicitly so a player's
+-- Charm can't toggle a teammate's hostility state and outgoing-damage
+-- multiplier (Combat.lua:3623-).
+HookUtils.wrap("CharmApply", function(baseFun, triggerArgs)
+    local victim = triggerArgs and triggerArgs.TriggeredByTable
+    local attacker = triggerArgs and triggerArgs.AttackerTable
+    if victim and attacker
+        and CoopPlayers.IsPlayerHero(victim)
+        and CoopPlayers.IsPlayerHero(attacker)
+        and attacker ~= victim
+    then
+        return
+    end
+    return baseFun(triggerArgs)
+end)
+
+-- Freeze: vanilla HitByFreezeWeapon(victim) sets victim.Frozen = true and
+-- spawns FreezeEscape, which only listens for control input when
+-- `victim == CurrentRun.Hero` (Combat.lua:3827). Any other player who
+-- gets frozen relies on the enemy-style 0.5s auto-attempt timer, which
+-- feels broken next to P1's mash-to-escape behavior. The OnEffectApply
+-- clear above prevents player-source chill from stacking to max, but
+-- defense-in-depth: drop HitByFreezeWeapon for non-main player heroes
+-- regardless of source, so freeze stays a P1-only mechanic.
+HookUtils.wrap("HitByFreezeWeapon", function(baseFun, victim)
+    if victim and CoopPlayers.IsPlayerHero(victim)
+        and victim ~= CoopPlayers.GetMainHero()
+    then
+        return
+    end
+    return baseFun(victim)
 end)
 
 HeroContextWrapper.WrapTriggerHero("OnEffectCleared", "TriggeredByTable")
