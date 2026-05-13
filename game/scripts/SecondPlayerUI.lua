@@ -3,20 +3,23 @@
 -- lives in CoopPlayerUi.lua, parameterized on a position config; this file
 -- exposes the original SecondPlayerUi.* method surface for existing call
 -- sites (UIHooks, DamageHooks, GamemodeInit, RunHooks) so they keep working
--- unchanged. The P2 instance uses the bottom-right corner layout that
--- matches the original screen positions byte-for-byte.
+-- unchanged. The P2 instance uses the bottom-row slot layout sized for the
+-- active player count — in 2P this collapses to the legacy BR position
+-- byte-identical; in 3P/4P P2 occupies a middle slot.
 --
 
 ---@type CoopPlayerUi
 local CoopPlayerUi = ModRequire "CoopPlayerUi.lua"
+---@type CoopPlayers
+local CoopPlayers = ModRequire "CoopPlayers.lua"
 
 ---@class SecondPlayerUi
 local SecondPlayerUi = {}
 
 -- Pre-populated with an empty table so early `SecondPlayerUi.ScreenAnchors.X`
 -- reads from UIHooks closures don't nil-index. Instance creation is deferred
--- to first use because LayoutForCorner("BR") references ScreenWidth, which
--- the engine hasn't defined yet at module-load time.
+-- to first use because LayoutForBottomSlot references ScreenWidth, which the
+-- engine hasn't defined yet at module-load time.
 SecondPlayerUi.ScreenAnchors = {}
 
 local cachedInstance
@@ -25,7 +28,8 @@ local function GetInstance()
     if cachedInstance == nil then
         cachedInstance = CoopPlayerUi.Get(2)
         if cachedInstance == nil then
-            cachedInstance = CoopPlayerUi.Create(2, CoopPlayerUi.LayoutForCorner("BR"))
+            cachedInstance = CoopPlayerUi.Create(2,
+                CoopPlayerUi.LayoutForBottomSlot(2, CoopPlayers.GetPlayersCount()))
         end
         -- Share storage with the placeholder ScreenAnchors so any references
         -- captured earlier still see live data: copy any existing entries

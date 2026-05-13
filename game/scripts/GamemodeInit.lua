@@ -114,17 +114,17 @@ OnAnyLoad {
                 -- Spawn a hero unit and UI for every co-op slot that exists in
                 -- the engine. CoopInit/InitCoopPlayer already allocated those
                 -- based on the menu's captured controller count, so this loop
-                -- naturally scales from 2 to 4. P2 keeps its bottom-right UI
-                -- via the SecondPlayerUi shim (constructed lazily on first
-                -- access); P3+ get the corner layouts from CoopPlayerUi.
-                -- P2 stays at vanilla bottom-right (handled by SecondPlayerUI's
-                -- LayoutForCorner("BR")). P3/P4 fill the gap between P1's
-                -- vanilla bottom-left HUD and P2's bottom-right HUD, evenly
-                -- spaced. On-screen left-to-right: P1, P3, P4, P2.
-                for playerId = 2, CoopPlayers.GetPlayersCount() do
+                -- naturally scales from 2 to 4. P2's UI comes through the
+                -- SecondPlayerUi shim (constructed lazily on first access);
+                -- P3+ are wired here. All bottom-row slots use LayoutForBottomSlot
+                -- with totalSlots = GetPlayersCount so positions space evenly
+                -- between P1's vanilla bottom-left HUD and the bottom-right
+                -- corner. On-screen left-to-right is P1, P2, ..., P_N.
+                local totalPlayers = CoopPlayers.GetPlayersCount()
+                for playerId = 2, totalPlayers do
                     CoopPlayers.InitCoopUnit(playerId)
                     if playerId >= 3 and not CoopPlayerUi.Get(playerId) then
-                        local ui = CoopPlayerUi.Create(playerId, CoopPlayerUi.LayoutForBottomSlot(playerId))
+                        local ui = CoopPlayerUi.Create(playerId, CoopPlayerUi.LayoutForBottomSlot(playerId, totalPlayers))
                         -- Vanilla ShowHealthUI / ShowAmmoUI / ShowSuperMeter
                         -- fire once early in the run, before this instance
                         -- exists, so the UIHooks dispatchers miss P3+. Show

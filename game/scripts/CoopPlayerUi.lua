@@ -184,53 +184,50 @@ function CoopPlayerUi.LayoutForCorner(corner)
     end
 end
 
--- Build a position config for slot 3 or 4 along the bottom row, filling the
--- gap BETWEEN P1's vanilla bottom-left HUD and P2's bottom-right CoopPlayerUi.
--- P1 and P2 are NOT touched. P3 and P4 anchor evenly between them so the
--- on-screen left-to-right reading order is P1 - P3 - P4 - P2, each tinted in
--- its own player color.
+-- Build a position config for a bottom-row slot. slotIndex is the player ID
+-- (P2/P3/P4) since bottom-row players occupy slots in player-ID order;
+-- totalSlots is the number of active players so positions can be spaced
+-- evenly between P1's vanilla bottom-left HUD and the bottom-right corner.
 --
--- The relative offsets (lifepips/ammo/super/gun positions vs the bar anchor)
--- mirror LayoutForCorner("BR")'s right-anchored shape exactly, just translated
--- to the new X anchor. That keeps the visual block per slot recognizable.
----@param slotIndex 3 | 4
+-- N=2 collapses to a single right-anchored slot (slot 2 sits at the legacy
+-- BR position byte-identical). N=3 puts P2 in the middle, P3 at BR. N=4
+-- spreads P2/P3/P4 across the gap with P4 at BR.
+--
+-- Rightmost slot (slotIndex == totalSlots) keeps the BR-style decorative
+-- corner shadow and right-aligned pip cluster. Middle slots use an
+-- offscreen shadow target and a center-clustered pip set since they have
+-- no screen edge to anchor against.
+---@param slotIndex 2 | 3 | 4
+---@param totalSlots 2 | 3 | 4
 ---@return CoopPlayerUiPosition
-function CoopPlayerUi.LayoutForBottomSlot(slotIndex)
+function CoopPlayerUi.LayoutForBottomSlot(slotIndex, totalSlots)
     -- SetAnimation Color is 0-255 RGBA (see Color.lua: Black = {0,0,0,255}).
-    -- These are pre-saturated for the bar's pastel-ifying multiply blend —
-    -- see the BR comment in LayoutForCorner for the same rationale.
+    -- Bar tints are pre-saturated to compensate for the texture's
+    -- pastel-ifying multiply blend — outline+label use the brighter on-
+    -- screen palette (89/217/242 etc.) but the bar needs darker dominant-
+    -- channel input to render at the same apparent vividness.
     local barColors = {
+        [2] = { 0,   180, 220, 255 },   -- P2 cyan
         [3] = { 60,  200, 40,  255 },   -- P3 green
         [4] = { 150, 40,  220, 255 },   -- P4 purple
     }
 
-    -- Approximate P1's left edge (vanilla bar anchor) and P2's BR anchor.
-    -- P2's healthBarX is ScreenWidth - 500; P1's vanilla position is just
-    -- inside the left edge. The three evenly-spaced anchor points across
-    -- the gap put slot 3 at 1/3 and slot 4 at 2/3.
-    local p1AnchorX = 50
-    local p2AnchorX = ScreenWidth - 500
-    local step = (p2AnchorX - p1AnchorX) / 3
-    local barX = p1AnchorX + (slotIndex - 2) * step
+    local leftAnchor  = 50
+    local rightAnchor = ScreenWidth - 500
+    local step = (rightAnchor - leftAnchor) / (totalSlots - 1)
+    local barX = leftAnchor + (slotIndex - 1) * step
 
-    DebugPrint { Text = "TN_Coop LayoutForBottomSlot slot=" .. tostring(slotIndex)
-        .. " ScreenWidth=" .. tostring(ScreenWidth)
-        .. " ScreenHeight=" .. tostring(ScreenHeight)
-        .. " barX=" .. tostring(barX)
-        .. " barColor=" .. tostring(barColors[slotIndex] and barColors[slotIndex][1])
-    }
+    local isRightmost = slotIndex == totalSlots
 
     return {
         healthBarX = barX,
         healthBarY = ScreenHeight - 50,
-        -- LifePipBaseX is the rightmost pip; pips grow leftward by 32 each.
-        -- BR's vanilla value puts pips at the far right of the bar art so they
-        -- read against the room-shadow background. For a bottom-row slot
-        -- there's no shadow to anchor against — centering the pip cluster on
-        -- the bar middle (barX + ~210, the visual center of the ~420-wide bar
-        -- art) reads cleaner. base = barX + 242 puts a 3-pip cluster centered
-        -- on barX + 210; a 5-pip cluster will lean ~32px right of center.
-        lifePipBaseX = barX + 242,
+        -- Rightmost slot keeps BR-vanilla's right-aligned pip cluster
+        -- (rightmost pip flush with the bar's right edge, reading against
+        -- the corner shadow). Middle slots center the cluster on the bar's
+        -- visual midpoint (~barX + 210) since they have no corner shadow
+        -- to anchor against.
+        lifePipBaseX = isRightmost and (barX + 340) or (barX + 242),
         lifePipY = ScreenHeight - 95,
         ammoIndicatorX = barX - 162,
         ammoIndicatorY = ScreenHeight - 62,
@@ -243,17 +240,17 @@ function CoopPlayerUi.LayoutForBottomSlot(slotIndex)
         superPipY = SuperUI.PipY,
         gunUiX = barX + 336 - GunUI.StartX,
         gunUiY = GunUI.StartY,
-        -- Shadow sits below the bottom edge (largely off-screen) — the
-        -- decorative corner-shadow only really reads at screen corners and
-        -- this slot isn't at one. Keep the value so SetAnimation has a target.
-        shadowX = barX + 250,
-        shadowY = ScreenHeight + 100,
-        shadowFlipX = false,
+        -- Decorative corner shadow only reads at the screen edge — anchor
+        -- it on-screen for the rightmost slot, offscreen for middle slots
+        -- (SetAnimation still needs a target obstacle).
+        shadowX = isRightmost and ScreenWidth or (barX + 250),
+        shadowY = isRightmost and ScreenHeight or (ScreenHeight + 100),
+        shadowFlipX = isRightmost,
         shadowFlipY = false,
         selfStoredAmmoBaseOffsetX = 980,
         selfStoredAmmoBaseOffsetY = -50,
         healthTextOffsetX = -90,
-        barColor = barColors[slotIndex],
+        barColor = barColors[slotIndex] or { 200, 200, 200, 255 },
     }
 end
 
