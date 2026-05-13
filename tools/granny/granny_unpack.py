@@ -225,19 +225,25 @@ T_REAL16 = 21
 T_EMPTYREFERENCE = 22
 
 # Per-type field size in sector 0 (one element, ignoring array_size).
-# INLINE has no fixed size — its size is the sum of its children. Reference
-# types are 64-bit pointers (8 bytes on 64-bit Granny). REFERENCETOARRAY /
-# ARRAYOFREFERENCES / VARIANTREFERENCE / REFERENCETOVARIANTARRAY are 16
-# bytes: a u32 element count + 4 padding + u64 pointer (or two u64s for
-# variants). TRANSFORM is 56 bytes (4×4 matrix + scale shear).
+# These match arves100/opengr2 libopengrn/typeinfo.c ELEMENT_TYPE_INFO
+# size64 column for Granny v7 64-bit:
+#   REFERENCE                    8   (u64 pointer)
+#   REFERENCETOARRAY             12  (u32 count + u64 pointer)
+#   ARRAYOFREFERENCES            12  (u32 count + u64 pointer-array base)
+#   VARIANTREFERENCE             16  (u64 offset + u64 pointer)
+#   REFERENCETOVARIANTARRAY      20  (u64 offset + u32 count + u64 pointer)
+#   STRING                       8   (u64 pointer or, in GPK, u64 index)
+#   TRANSFORM                    68  (translation + quat rotation + 3x3 scale-shear, 17 floats)
+# INLINE is sized by walking its children. EMPTYREFERENCE is an 8-byte
+# placeholder (always null in practice).
 _TYPE_SIZE = {
     T_REFERENCE: 8,
-    T_REFERENCETOARRAY: 16,
-    T_ARRAYOFREFERENCES: 16,
+    T_REFERENCETOARRAY: 12,
+    T_ARRAYOFREFERENCES: 12,
     T_VARIANTREFERENCE: 16,
-    T_REFERENCETOVARIANTARRAY: 16,
+    T_REFERENCETOVARIANTARRAY: 20,
     T_STRING: 8,
-    T_TRANSFORM: 56,
+    T_TRANSFORM: 68,
     T_REAL32: 4,
     T_INT8: 1,
     T_UINT8: 1,
@@ -410,11 +416,17 @@ def find_string_positions(raw_gr2: bytes) -> dict:
         }
 
     s0_strings = []
-    root_type = _parse_type_def(sector_6, type_ref_offset)
     s0_fixups_by_src = {f[0]: (f[1], f[2]) for f in fixups_by_sector[0]}
-    _walk_struct(
-        root_type, sector_6, sector_0, root_ref_offset,
-        s6_fixups_by_src, s0_fixups_by_src, s0_strings, set()
+
+    # The file info's `type` reference doesn't point to a single root type
+    # def — it points to the FIRST entry of a children-style list of type
+    # defs, NUL-terminated by a TYPEID_NONE entry. See opengr2's gr2_read.c
+    # which passes this pointer to Element_Parse, and Element_Parse walks
+    # consecutive type defs from there. So we walk it as if it were the
+    # children list of an implicit root struct that lives at root_ref_offset.
+    _walk_struct_fields(
+        type_ref_offset, sector_6, sector_0, root_ref_offset,
+        s6_fixups_by_src, s0_fixups_by_src, s0_strings, set(),
     )
 
     return {
@@ -477,31 +489,27 @@ def _walk_struct(
         return
 
     if type_id in (T_REFERENCETOARRAY, T_ARRAYOFREFERENCES):
-        # 16-byte field: u32 count, u32 pad, u64 pointer-or-array-base.
+        # 12 bytes: u32 count at +0, u64 pointer at +4. Children describe
+        # the element type's fields.
         count = struct.unpack_from("<I", sector_0, data_offset)[0]
-        target = s0_fixups_by_src.get(data_offset + 8)
+        target = s0_fixups_by_src.get(data_offset + 4)
         if target is None or target[0] != 0 or count <= 0:
             return
-        # Children list describes the element type's fields. For
-        # ARRAYOFREFERENCES each element is itself a pointer (8 bytes);
-        # for REFERENCETOARRAY each element is the struct inline. Both
-        # collapse to "walk children at the element's start".
         children_off = _resolve_s6_fixup(type_def._pos + 0x0C, s6_fixups_by_src)
         if children_off is None:
             return
-        # Compute element size by summing children sizes.
         elem_size = sum(
             _field_size(c, sector_6, s6_fixups_by_src)
             for c in _walk_children(children_off, sector_6)
         )
         if elem_size == 0:
             return
-        for i in range(count):
-            elem_off = target[1] + i * elem_size
-            if type_id == T_ARRAYOFREFERENCES:
-                # Each array slot holds a pointer; resolve and walk the
-                # pointed-at struct.
-                ref_target = s0_fixups_by_src.get(elem_off)
+        if type_id == T_ARRAYOFREFERENCES:
+            # Pointer array — each slot at array_base + i*8 holds a u64
+            # pointer to the i-th struct.
+            for i in range(count):
+                slot_off = target[1] + i * 8
+                ref_target = s0_fixups_by_src.get(slot_off)
                 if ref_target is None or ref_target[0] != 0:
                     continue
                 _walk_struct_fields(
@@ -509,49 +517,65 @@ def _walk_struct(
                     s6_fixups_by_src, s0_fixups_by_src,
                     out_string_positions, visited,
                 )
-            else:
+        else:
+            # REFERENCETOARRAY: contiguous array of inline structs starting
+            # at array_base.
+            for i in range(count):
                 _walk_struct_fields(
-                    children_off, sector_6, sector_0, elem_off,
+                    children_off, sector_6, sector_0, target[1] + i * elem_size,
                     s6_fixups_by_src, s0_fixups_by_src,
                     out_string_positions, visited,
                 )
         return
 
     if type_id == T_VARIANTREFERENCE:
-        # 16 bytes: u64 pointer to type def (sector 6), u64 pointer to
-        # data (sector 0). Both fixups live in sector 0's fixup table.
-        type_fx = s0_fixups_by_src.get(data_offset)
+        # 16 bytes: u64 additive offset at +0, u64 data pointer at +8.
+        # The struct lives at (resolved_pointer + offset). The type
+        # description is this type def's children list — NOT a separate
+        # type pointer at +0 as the gist's "type + pointer pair" wording
+        # suggested. See opengr2 libopengrn/elements_parse.c VARIANTREFERENCE
+        # case and Element_ParseNode's REFERENCE branch.
+        extra_offset = struct.unpack_from("<Q", sector_0, data_offset)[0]
         data_fx = s0_fixups_by_src.get(data_offset + 8)
-        if type_fx is None or data_fx is None:
+        if data_fx is None or data_fx[0] != 0:
             return
-        if type_fx[0] != 6 or data_fx[0] != 0:
+        struct_start = data_fx[1] + extra_offset
+        children_off = _resolve_s6_fixup(type_def._pos + 0x0C, s6_fixups_by_src)
+        if children_off is None:
             return
-        variant_type = _parse_type_def(sector_6, type_fx[1])
-        _walk_struct(
-            variant_type, sector_6, sector_0, data_fx[1],
+        key = (type_def._pos, struct_start)
+        if key in visited:
+            return
+        visited.add(key)
+        _walk_struct_fields(
+            children_off, sector_6, sector_0, struct_start,
             s6_fixups_by_src, s0_fixups_by_src,
             out_string_positions, visited,
         )
         return
 
     if type_id == T_REFERENCETOVARIANTARRAY:
-        # 16 bytes: u32 count, u32 pad, u64 pointer to first variant.
-        # Each variant in the array is itself 16 bytes (type ptr + data ptr).
-        count = struct.unpack_from("<I", sector_0, data_offset)[0]
-        array_fx = s0_fixups_by_src.get(data_offset + 8)
-        if array_fx is None or array_fx[0] != 0 or count <= 0:
+        # 20 bytes: u64 additive offset at +0, u32 count at +8, u64 data
+        # pointer at +12. Iterate `count` elements starting at
+        # (resolved_pointer + offset), each one elem_size bytes wide.
+        extra_offset = struct.unpack_from("<Q", sector_0, data_offset)[0]
+        count = struct.unpack_from("<I", sector_0, data_offset + 8)[0]
+        data_fx = s0_fixups_by_src.get(data_offset + 12)
+        if data_fx is None or data_fx[0] != 0 or count <= 0:
+            return
+        children_off = _resolve_s6_fixup(type_def._pos + 0x0C, s6_fixups_by_src)
+        if children_off is None:
+            return
+        elem_size = sum(
+            _field_size(c, sector_6, s6_fixups_by_src)
+            for c in _walk_children(children_off, sector_6)
+        )
+        if elem_size == 0:
             return
         for i in range(count):
-            elem_off = array_fx[1] + i * 16
-            type_fx = s0_fixups_by_src.get(elem_off)
-            data_fx = s0_fixups_by_src.get(elem_off + 8)
-            if type_fx is None or data_fx is None:
-                continue
-            if type_fx[0] != 6 or data_fx[0] != 0:
-                continue
-            variant_type = _parse_type_def(sector_6, type_fx[1])
-            _walk_struct(
-                variant_type, sector_6, sector_0, data_fx[1],
+            _walk_struct_fields(
+                children_off, sector_6, sector_0,
+                data_fx[1] + extra_offset + i * elem_size,
                 s6_fixups_by_src, s0_fixups_by_src,
                 out_string_positions, visited,
             )
