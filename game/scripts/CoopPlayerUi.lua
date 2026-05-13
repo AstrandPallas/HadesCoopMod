@@ -21,7 +21,7 @@ CoopPlayerUi.__index = CoopPlayerUi
 ---@class CoopPlayerUiPosition
 ---@field healthBarX number
 ---@field healthBarY number
----@field lifePipBaseX number      X of the rightmost pip (pips grow leftward by 32 each)
+---@field lifePipBaseX number      X of the leftmost pip (pips grow rightward by 32 each, matching vanilla P1)
 ---@field lifePipY number
 ---@field ammoIndicatorX number
 ---@field ammoIndicatorY number
@@ -227,26 +227,24 @@ function CoopPlayerUi.LayoutForBottomSlot(slotIndex, totalSlots)
         -- the corner shadow). Middle slots center the cluster on the bar's
         -- visual midpoint (~barX + 210) since they have no corner shadow
         -- to anchor against.
-        lifePipBaseX = isRightmost and (barX + 340) or (barX + 242),
+        -- Mirror vanilla P1's row-above-the-bar exactly so every player's
+        -- pip+bloodstone cluster reads identical, just translated to its
+        -- own bar's left edge. Vanilla P1 (UIScripts.lua:RecreateLifePips
+        -- + the ShowAmmoUI override) places:
+        --   pip i (1-indexed)   → barX + 60 + i*32   (barX = 10 for P1)
+        --   bloodstone icon     → barX + 206
+        --   bloodstone Y        → ScreenHeight - 105
+        --   pip Y               → ScreenHeight - 95
+        -- So pip 1 (leftmost) lands at barX + 92, pip 3 (rightmost in the
+        -- vanilla 3-pip max) at barX + 156, and the bloodstone sits ~50px
+        -- to the right of the rightmost pip.
+        lifePipBaseX = barX + 92,
         lifePipY = ScreenHeight - 95,
-        -- Bloodstone (cast/ammo) icon + count sit just LEFT of the pip
-        -- cluster on the row above the bar. -178 puts the icon ~50px from
-        -- the leftmost pip in the 3-pip default case (the vanilla maximum
-        -- with full Death Defiance mirror upgrades), accounting for the
-        -- ~64px-wide icon+text cluster:
-        --   leftmost pip = lifePipBaseX - 64  (for 3 pips growing left)
-        --   cluster right edge = ammoIndicatorX + 64
-        --   target gap edge-to-edge ≈ 50
-        --   ammoIndicatorX = lifePipBaseX - 64 - 50 - 64 = lifePipBaseX - 178
-        -- Y is lifted 10px above the pip row to compensate for the icon
-        -- art's lower-anchored baseline; this visually aligns its center
-        -- with the centered pip skulls.
-        ammoIndicatorX = (isRightmost and (barX + 340) or (barX + 242)) - 178,
+        ammoIndicatorX = barX + 206,
         ammoIndicatorY = ScreenHeight - 105,
-        -- Reload timer keeps the same relative offset from the ammo
-        -- indicator it used to have (+18, -8): docks just above-right of
-        -- the bloodstone icon.
-        ammoReloadX = (isRightmost and (barX + 340) or (barX + 242)) - 160,
+        -- Reload timer keeps the +18, -8 relative offset from the ammo
+        -- indicator (docks just above-right of the bloodstone icon).
+        ammoReloadX = barX + 224,
         ammoReloadY = ScreenHeight - 113,
         ammoReloadMultiYOffset = 35,
         ammoReloadFinishTargetYOffset = 40,
@@ -523,10 +521,13 @@ function CoopPlayerUi:RecreateLifePips()
     end
 
     local p = self.position
+    -- Grow pips rightward from lifePipBaseX (leftmost pip), matching
+    -- vanilla P1's RecreateLifePips formula (X = 70 + i*32, where 70 is
+    -- 10 + 60 with barX = 10 — so pip 1 lands at barX + 92).
     for i = 1, numLastStands do
         local obstacleId = CreateScreenObstacle({
             Name = "BlankObstacle", Group = "Combat_UI",
-            X = p.lifePipBaseX - i * 32, Y = p.lifePipY,
+            X = p.lifePipBaseX + (i - 1) * 32, Y = p.lifePipY,
         })
         SetAnimation({ Name = "ExtraLifeEmpty", DestinationId = obstacleId })
         table.insert(self.ScreenAnchors.LifePipIds, obstacleId)
