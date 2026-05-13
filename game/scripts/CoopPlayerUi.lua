@@ -235,16 +235,20 @@ function CoopPlayerUi.LayoutForBottomSlot(slotIndex, totalSlots)
         --   bloodstone icon     → barX + 206
         --   bloodstone Y        → ScreenHeight - 105
         --   pip Y               → ScreenHeight - 95
-        -- So pip 1 (leftmost) lands at barX + 92, pip 3 (rightmost in the
-        -- vanilla 3-pip max) at barX + 156, and the bloodstone sits ~50px
-        -- to the right of the rightmost pip.
-        lifePipBaseX = barX + 92,
+        -- A pure +92 / +206 translation reads ~20px too far left because
+        -- the CoopPlayerUi ShowHealthUI formula offsets the bar obstacle
+        -- by `+(FadeDistance.Health - 10) = +20` relative to p.healthBarX,
+        -- whereas vanilla P1 offsets the obstacle by `-FadeDistance.Health
+        -- = -30` relative to its conceptual "10" anchor. The +20 added
+        -- here compensates so the cluster lands at the same position
+        -- *relative to the bar's visible left edge* that P1's does.
+        lifePipBaseX = barX + 112,
         lifePipY = ScreenHeight - 95,
-        ammoIndicatorX = barX + 206,
+        ammoIndicatorX = barX + 226,
         ammoIndicatorY = ScreenHeight - 105,
         -- Reload timer keeps the +18, -8 relative offset from the ammo
         -- indicator (docks just above-right of the bloodstone icon).
-        ammoReloadX = barX + 224,
+        ammoReloadX = barX + 244,
         ammoReloadY = ScreenHeight - 113,
         ammoReloadMultiYOffset = 35,
         ammoReloadFinishTargetYOffset = 40,
