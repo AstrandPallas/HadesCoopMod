@@ -1,3 +1,4 @@
 out-*/
 *.gr2-raw
 *.gr2
+__pycache__/
