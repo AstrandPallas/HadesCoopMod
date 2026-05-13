@@ -45,22 +45,89 @@ python granny_unpack.py unpack-all <Char>.gpk <Char>.sdb -o ./melinoe-gr2
 
 Requires `lz4` Python package: `pip install lz4`.
 
-## convert_to_dae.ps1 — standalone .gr2 → Collada
+## convert_to_dae.ps1 / convert_to_glb.ps1 — standalone .gr2 → Blender-importable
 
-Wraps [Norbyte/lslib](https://github.com/Norbyte/lslib)'s `Divine.exe`
-(prebuilt at the latest release; bundled with `granny2.dll`).
+Both wrap [Norbyte/lslib](https://github.com/Norbyte/lslib)'s `Divine.exe`.
+Use whichever importer your Blender supports:
+
+| Output | Coverage          | Blender importer            |
+|--------|-------------------|-----------------------------|
+| `.glb` | ~791/855 (~92.5%) | Built-in glTF 2.0 (always)  |
+| `.dae` | ~846/855 (~99.0%) | Collada add-on (4.5+ may have dropped it) |
 
 ```powershell
-pwsh tools/granny/convert_to_dae.ps1
+pwsh tools/granny/convert_to_glb.ps1   # glTF binary  → File > Import > glTF 2.0
+pwsh tools/granny/convert_to_dae.ps1   # Collada      → File > Import > Collada
 ```
 
-Downloads expected: `lslib` extracted to `C:\Users\matte\src\lslib\ExportTool\`.
-Adjust `-DivinePath` parameter if installed elsewhere.
+Downloads expected: `lslib` v1.20.4 extracted to
+`C:\Users\matte\src\lslib\ExportTool\`. Adjust `-DivinePath` if installed
+elsewhere.
 
-**Why DAE, not glTF**: lslib's glTF exporter throws a
-`NullReferenceException` inside `ExportMeshExtensions` on Hades II files —
-it looks up BG3-specific extension metadata that Hades II entries don't
-carry. DAE export skips that code path and succeeds on ~99% of entries.
+### glTF export requires a patched lslib
+
+Stock lslib v1.20.4 crashes its glTF mesh export on Hades II files —
+`GLTFExporter.ExportMeshExtensions` dereferences `mesh.ExtendedData.UserMeshProperties`
+without a null check, and Hades II meshes don't carry that BG3-specific
+metadata. The patch is a one-line `?.` guard with a fallback path that
+still emits the `ExportOrder` + `ParentBone` extensions when meaningful.
+
+Steps to reproduce the patched build (matches what's installed locally):
+
+```bash
+git clone https://github.com/Norbyte/lslib.git
+cd lslib
+
+# Download dependencies (the project's prebuild step needs gplex/gppg)
+mkdir -p external && cd external
+curl -sLo gppg.zip 'https://s3.eu-central-1.amazonaws.com/nb-stor/dos-legacy/ExportTool/gppg-distro-1_5_2.zip'
+unzip -q gppg.zip && mkdir -p gppg/binaries
+cp gppg-distro-1_5_2/binaries/* gppg/binaries/
+cd ..
+
+# Run gplex/gppg manually (the in-csproj PreBuildEvent uses $(SolutionDir) which
+# doesn't resolve when building a .csproj outside a .sln; do it ourselves).
+./external/gppg/binaries/Gplex.exe /out:LSLib/LS/Story/GoalParser/Goal.lex.cs   LSLib/LS/Story/GoalParser/Goal.lex
+./external/gppg/binaries/Gppg.exe  /out:LSLib/LS/Story/GoalParser/Goal.yy.cs   LSLib/LS/Story/GoalParser/Goal.yy
+./external/gppg/binaries/Gplex.exe /out:LSLib/LS/Story/HeaderParser/StoryHeader.lex.cs LSLib/LS/Story/HeaderParser/StoryHeader.lex
+./external/gppg/binaries/Gppg.exe  /out:LSLib/LS/Story/HeaderParser/StoryHeader.yy.cs LSLib/LS/Story/HeaderParser/StoryHeader.yy
+
+# Strip #line directives that reference relative paths the compiler can't find
+# at build time. They're debug-only.
+python -c "import re,sys,pathlib
+for p in ['LSLib/LS/Story/GoalParser/Goal.lex.cs','LSLib/LS/Story/GoalParser/Goal.yy.cs','LSLib/LS/Story/HeaderParser/StoryHeader.lex.cs','LSLib/LS/Story/HeaderParser/StoryHeader.yy.cs']:
+    p = pathlib.Path(p)
+    s = p.read_text(encoding='utf-8', errors='replace')
+    s = re.sub(r'^#line\s+\d+\s+\"[^\"]*\"\s*\$','',s,flags=re.MULTILINE)
+    p.write_text(s, encoding='utf-8')"
+
+# Edit LSLib/LSLib.csproj:
+# - Clear the <PreBuildEvent>...</PreBuildEvent> block (we just ran it).
+# - Replace <ProjectReference Include="..\LSLibNative\LSLibNative.vcxproj" />
+#   with <Reference Include="LSLibNative"><HintPath>..\..\ExportTool\Packed\LSLibNative.dll</HintPath></Reference>
+#   so we reuse the prebuilt native DLL instead of needing the C++ toolchain.
+
+# Patch GLTFExporter.cs ExportMeshExtensions:
+# - Change `var user = extd.UserMeshProperties;` to `var user = extd?.UserMeshProperties;`
+# - Insert early-return when extd or user is null that still emits ExportOrder
+#   and ParentBone (rigid-mesh attachment data) where applicable.
+
+dotnet publish LSLib/LSLib.csproj -c Release -o LSLib/publish
+cp LSLib/publish/*.dll C:/Users/matte/src/lslib/ExportTool/Packed/
+cp LSLib/publish/*.dll C:/Users/matte/src/lslib/ExportTool/Packed/Tools/
+```
+
+### Failure modes
+
+`.glb` path:
+- "multiple track groups is not supported" — for Mel's compound run-stop
+  animations (Axe special-upper return-to-idle etc.)
+- "without skeleton data is not supported" — for short reaction clips
+- For these, fall back to the `.dae` path.
+
+`.dae` path:
+- 9 entries hit a different lslib export bug (Aspect of Morrigan dagger
+  executes, blur effects, Lob run-stop). Skip those clips.
 
 ## Verified output
 

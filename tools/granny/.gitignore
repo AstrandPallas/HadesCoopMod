@@ -3,3 +3,4 @@ out-*/
 *.gr2
 __pycache__/
 melinoe-dae/
+melinoe-glb/
