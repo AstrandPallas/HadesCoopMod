@@ -619,6 +619,210 @@ def _field_size_single(td: TypeDef, sector_6: bytes, s6_fixups_by_src: dict) -> 
     return _TYPE_SIZE.get(td.type_id, 0)
 
 
+# ---------------------------------------------------------------------------
+# Phase 4: merge a GPK entry + SDB strings into a standalone .gr2 file.
+# ---------------------------------------------------------------------------
+#
+# Per the gist § "Creating Standalone GR2 from GPK + SDB":
+#   1. Walk the GPK entry's type tree to collect every STRING-field
+#      position in sector 0 and every type-name position in sector 6.
+#   2. Resolve each index to a string via the SDB table.
+#   3. Append the strings (deduplicated) to the END of sector 0 as
+#      NUL-terminated UTF-8.
+#   4. Zero out the index bytes at every recorded position.
+#   5. Add fixup entries pointing each position to its string in sector 0.
+#   6. Recompute sector sizes, file total size, and the CRC32 over the
+#      gist-specified byte ranges.
+#
+# Layout of the merged file follows the gist § "File Structure":
+#   32B magic | 72B file info | 8*44B sector infos | sector 0 data |
+#   sector 5/6 data (others empty) | fixup tables | marshall tables (empty)
+#
+# We keep sector 6 byte content unchanged and only ADD to its fixup
+# table — name_offset values in type defs stay as integer indices in the
+# bytes but the fixups override them (the gist mentions zeroing optional
+# but pointer fixups take precedence in the parser).
+
+CRC32_POLY = 0xEDB88320
+
+
+def _crc32(data: bytes, initial: int = 0xFFFFFFFF) -> int:
+    """Reflected CRC-32 with polynomial 0xEDB88320 (gist § "CRC Calculation").
+    Match opengr2's CRC implementation. Standard reflected algorithm."""
+    crc = initial
+    for byte in data:
+        crc = (crc >> 8) ^ _CRC_TABLE[(crc ^ byte) & 0xFF]
+    return crc ^ 0xFFFFFFFF
+
+
+def _make_crc_table():
+    table = []
+    for i in range(256):
+        c = i
+        for _ in range(8):
+            c = (c >> 1) ^ CRC32_POLY if (c & 1) else (c >> 1)
+        table.append(c)
+    return table
+
+
+_CRC_TABLE = _make_crc_table()
+
+
+def merge_gpk_entry(raw_entry: bytes, sdb_strings: list) -> bytes:
+    """Convert one decompressed GPK entry into a standalone .gr2 file.
+
+    The procedure parallels opengr2's read path: we don't actually
+    interpret the data — we just (a) record where every string-index
+    field lives, (b) append the resolved strings to sector 0, (c) emit
+    fixup entries so a downstream parser resolves those positions to
+    the appended strings, and (d) update the size/CRC bookkeeping.
+    """
+    positions = find_string_positions(raw_entry)
+    sectors = positions["sectors"]
+    sector_0 = bytearray(_sector_data(raw_entry, sectors[0]))
+    sector_6 = bytes(_sector_data(raw_entry, sectors[6]))
+    fixups_by_sector = positions["fixups_by_sector"]
+
+    # Append strings to sector 0, dedup. `appended[index] = byte_offset_within_sector_0`
+    appended: dict = {}
+    appended_blob = bytearray()
+    base_off = len(sector_0)  # strings will start at the OLD end of sector 0
+
+    def offset_for(idx: int) -> int:
+        if idx in appended:
+            return appended[idx]
+        s = sdb_strings[idx] if 0 <= idx < len(sdb_strings) else ""
+        off = base_off + len(appended_blob)
+        appended_blob.extend(s.encode("utf-8"))
+        appended_blob.append(0)  # NUL terminator
+        appended[idx] = off
+        return off
+
+    # Sector 0 STRING fields: zero the index bytes; add a fixup
+    # (src=field_pos, dst=(0, string_pos)). Process the type-name
+    # field positions in sector 6 the same way but the source is
+    # sector 6, destination is sector 0.
+    new_s0_fixups = list(fixups_by_sector[0])
+    new_s6_fixups = list(fixups_by_sector[6])
+
+    for field_off, idx in positions["sector_0_strings"]:
+        str_pos = offset_for(idx)
+        # Zero the index bytes (u64) at this position so the string
+        # value reads as null until the fixup overrides it on load.
+        struct.pack_into("<Q", sector_0, field_off, 0)
+        new_s0_fixups.append((field_off, 0, str_pos))
+
+    for field_off, idx in positions["sector_6_typenames"]:
+        str_pos = offset_for(idx)
+        new_s6_fixups.append((field_off, 0, str_pos))
+
+    # The type-name field bytes in sector 6 currently hold the integer
+    # index. We need to zero those too, because the parser reads the
+    # field value when no fixup is present — and we DO have a fixup
+    # for it now. But sector_6 is bytes (immutable); make it bytearray
+    # and patch.
+    sector_6 = bytearray(sector_6)
+    for field_off, _idx in positions["sector_6_typenames"]:
+        struct.pack_into("<Q", sector_6, field_off, 0)
+
+    # Append the string blob to sector 0.
+    sector_0.extend(appended_blob)
+
+    # --- Reassemble the file. -------------------------------------------------
+    # Layout: magic(32) + file_info(72) + sector_infos(8*44=352) =
+    # 456 bytes header, then sector data in sector-index order, then
+    # fixup tables, then marshall tables (empty). The gist § "File
+    # Structure" notes Hades II files contain sectors 0, 5, 6 with
+    # non-zero data; sectors 1-4 and 7 are empty.
+    header_size = MAGIC_LEN + FILE_INFO_LEN + SECTOR_COUNT * SECTOR_INFO_LEN  # 456
+
+    sector_blobs = [b"" for _ in range(SECTOR_COUNT)]
+    sector_blobs[0] = bytes(sector_0)
+    # Preserve sector 5 (raw textures, normally empty) and sector 6 (types).
+    sector_blobs[5] = _sector_data(raw_entry, sectors[5])
+    sector_blobs[6] = bytes(sector_6)
+
+    new_fixup_lists = [list(fixups_by_sector[i]) for i in range(SECTOR_COUNT)]
+    new_fixup_lists[0] = new_s0_fixups
+    new_fixup_lists[6] = new_s6_fixups
+
+    # Lay sectors out at sequential offsets, recording their data_offset.
+    out = bytearray()
+    out.extend(b"\x00" * header_size)  # placeholder; we'll fill it in last
+    new_sector_infos = []
+    for i, blob in enumerate(sector_blobs):
+        if not blob:
+            new_sector_infos.append({"data_offset": len(out), "len": 0})
+            continue
+        new_sector_infos.append({"data_offset": len(out), "len": len(blob)})
+        out.extend(blob)
+
+    # Append fixup tables after all sector data.
+    fixup_table_starts = []
+    for fxs in new_fixup_lists:
+        fixup_table_starts.append(len(out))
+        for src, dst_sec, dst_off in fxs:
+            out.extend(struct.pack("<III", src, dst_sec, dst_off))
+
+    # Marshall tables: empty (per gist note, Hades II files have empty marshalls).
+    marshall_starts = [len(out)] * SECTOR_COUNT  # all at same EOF position
+
+    total_size = len(out)
+
+    # Build sector info structs (44 bytes each).
+    sec_infos_buf = bytearray()
+    for i, info in enumerate(new_sector_infos):
+        compression = 0
+        sec_infos_buf.extend(struct.pack(
+            "<11I",
+            compression,            # compression type
+            info["data_offset"],    # data offset
+            info["len"],            # compressed length (== decompressed for uncompressed)
+            info["len"],            # decompressed length
+            0,                      # alignment (matches Hades II observed)
+            0, 0,                   # oodle stops
+            fixup_table_starts[i],  # fixup table offset
+            len(new_fixup_lists[i]),# fixup count
+            marshall_starts[i],     # marshall table offset (empty == EOF)
+            0,                      # marshall count
+        ))
+
+    # Build file info (72 bytes for 64-bit format 7) — same field layout as input.
+    # We re-read most fields from the original file info to preserve them.
+    orig_file_info = raw_entry[MAGIC_LEN : MAGIC_LEN + FILE_INFO_LEN]
+    # Patch totalSize at offset 0x04, crc at 0x08 (placeholder), keep rest.
+    file_info_buf = bytearray(orig_file_info)
+    struct.pack_into("<I", file_info_buf, 0x04, total_size)
+    struct.pack_into("<I", file_info_buf, 0x08, 0)  # CRC placeholder; finalized below
+
+    # Write header: original magic + file_info_buf + sector_infos.
+    out[0:MAGIC_LEN] = raw_entry[:MAGIC_LEN]
+    out[MAGIC_LEN : MAGIC_LEN + FILE_INFO_LEN] = file_info_buf
+    out[MAGIC_LEN + FILE_INFO_LEN : header_size] = sec_infos_buf
+
+    # CRC range per gist: sector_infos + everything from offset 456 to EOF.
+    # FileInfo (offsets 0x00-0x67) and the 32-byte magic are EXCLUDED.
+    crc_input = bytes(out[SECTOR_INFOS_START:])
+    crc = _crc32(crc_input)
+    struct.pack_into("<I", out, MAGIC_LEN + 0x08, crc)
+
+    return bytes(out)
+
+
+def cmd_merge(args):
+    """Merge ONE extracted GPK entry with its SDB into a standalone .gr2."""
+    raw_entry = Path(args.entry).read_bytes()
+    sdb = parse_sdb_string_table(Path(args.sdb))
+    merged = merge_gpk_entry(raw_entry, sdb)
+    out_path = Path(args.output)
+    out_path.write_bytes(merged)
+    info = find_string_positions(raw_entry)
+    print(f"merged: {out_path}  ({len(merged):,} bytes)")
+    print(f"  sector-0 STRING fields:  {len(info['sector_0_strings'])}")
+    print(f"  sector-6 type names:     {len(info['sector_6_typenames'])}")
+    return 0
+
+
 def cmd_inspect(args):
     """Diagnostic: load one extracted GPK entry, run the type walker, and
     report counts. Useful for verifying Phase 3 against the gist's expected
@@ -823,6 +1027,18 @@ def main():
         help="Print the first N string-index positions (default: 0)",
     )
     inspect.set_defaults(func=cmd_inspect)
+
+    merge = sub.add_parser(
+        "merge",
+        help="Merge a GPK entry + SDB into a standalone .gr2 file "
+        "(append strings, zero indices, build fixups, recompute CRC).",
+    )
+    merge.add_argument("entry", help="Path to a .gr2-raw entry file")
+    merge.add_argument("sdb", help="Path to the matching .sdb file")
+    merge.add_argument(
+        "-o", "--output", required=True, help="Output .gr2 path"
+    )
+    merge.set_defaults(func=cmd_merge)
 
     args = p.parse_args()
     return args.func(args)
