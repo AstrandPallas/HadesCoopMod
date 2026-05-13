@@ -229,26 +229,27 @@ function CoopPlayerUi.LayoutForBottomSlot(slotIndex, totalSlots)
         -- to anchor against.
         -- Mirror vanilla P1's row-above-the-bar exactly so every player's
         -- pip+bloodstone cluster reads identical, just translated to its
-        -- own bar's left edge. Vanilla P1 (UIScripts.lua:RecreateLifePips
-        -- + the ShowAmmoUI override) places:
-        --   pip i (1-indexed)   → barX + 60 + i*32   (barX = 10 for P1)
-        --   bloodstone icon     → barX + 206
-        --   bloodstone Y        → ScreenHeight - 105
-        --   pip Y               → ScreenHeight - 95
-        -- A pure +92 / +206 translation reads ~20px too far left because
-        -- the CoopPlayerUi ShowHealthUI formula offsets the bar obstacle
-        -- by `+(FadeDistance.Health - 10) = +20` relative to p.healthBarX,
-        -- whereas vanilla P1 offsets the obstacle by `-FadeDistance.Health
-        -- = -30` relative to its conceptual "10" anchor. The +20 added
-        -- here compensates so the cluster lands at the same position
-        -- *relative to the bar's visible left edge* that P1's does.
-        lifePipBaseX = barX + 112,
+        -- own bar's left edge.
+        --
+        -- The full compensation is +50 vs P1's raw offsets, because
+        -- CoopPlayerUi:ShowHealthUI and vanilla P1's ShowHealthUI compute
+        -- the bar obstacle X with opposite signs around (10 - FadeDistance.Health):
+        --   vanilla P1:    obstacle = 10 - FadeDistance.Health           = -20
+        --   CoopPlayerUi:  obstacle = p.healthBarX - (10 - FadeDistance) = +20 from p.healthBarX
+        -- so for the same conceptual "10" anchor, the bar visual lands
+        -- 50px further right under CoopPlayerUi. Pip 1 and bloodstone
+        -- are pinned to absolute positions in vanilla, so to put them at
+        -- the same *bar-relative* position under CoopPlayerUi we add 50
+        -- to each offset: pip 1 at barX + 142 (= 92 + 50), bloodstone at
+        -- barX + 256 (= 206 + 50). After this, pip-from-bar-visible-left
+        -- and bloodstone-from-bar-visible-left both match P1's exactly.
+        lifePipBaseX = barX + 142,
         lifePipY = ScreenHeight - 95,
-        ammoIndicatorX = barX + 226,
+        ammoIndicatorX = barX + 256,
         ammoIndicatorY = ScreenHeight - 105,
         -- Reload timer keeps the +18, -8 relative offset from the ammo
         -- indicator (docks just above-right of the bloodstone icon).
-        ammoReloadX = barX + 244,
+        ammoReloadX = barX + 274,
         ammoReloadY = ScreenHeight - 113,
         ammoReloadMultiYOffset = 35,
         ammoReloadFinishTargetYOffset = 40,
