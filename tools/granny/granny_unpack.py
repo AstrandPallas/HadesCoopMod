@@ -13,7 +13,6 @@ each loadable by Granny Viewer or arves100/opengr2 without further fixup.
 
 Reverse engineering credit: alexpeattie's gist
   github.com/alexpeattie  (gist id: 12a644299a9f913c0514db9d628a2b39)
-Saved locally at C:\\Users\\matte\\src\\granny-format-notes.md
 
 Current state (2026-05-13 PM):
   Phase 1 (`unpack`):  COMPLETE.
