@@ -190,6 +190,42 @@ function UIHooks.InitHooks()
     end
 
     -- Ammo (red crystrals)
+    -- Replace vanilla ShowAmmoUI to position P1's bloodstone above the bar
+    -- next to the lifepip row, matching how P2-P4's CoopPlayerUi positions
+    -- the cast indicator. Done BEFORE SimpleHookWithVisibilityCheck so our
+    -- version becomes the `orig` the per-player dispatcher invokes for P1.
+    -- Body is verbatim vanilla UIScripts.lua:ShowAmmoUI with X/Y changed —
+    -- if vanilla updates the obstacle setup, this needs the same diff.
+    ShowAmmoUI = function()
+        if not ConfigOptionCache.ShowUIAnimations then return end
+        if ScreenAnchors.AmmoIndicatorUI ~= nil then return end
+
+        -- X=260 sits ~30px past the rightmost lifepip in the 5-pip max case
+        -- (P1's pips grow rightward from X=102; 5 pips end at X=230).
+        -- Y matches the lifepip row (lifePipY = ScreenHeight - 95) so the
+        -- bloodstone reads as part of the same row as the death-defiance
+        -- pips rather than sitting alongside the bar at mid-height.
+        ScreenAnchors.AmmoIndicatorUI = CreateScreenObstacle({
+            Name = "BlankObstacle", Group = "Combat_UI",
+            X = 260, Y = ScreenHeight - 95,
+        })
+        SetAnimation({ Name = "AmmoIndicatorIcon", DestinationId = ScreenAnchors.AmmoIndicatorUI })
+        CreateTextBox(MergeTables({
+            Id = ScreenAnchors.AmmoIndicatorUI, OffsetX = 24, OffsetY = -2,
+            Font = "AlegreyaSansSCBold", FontSize = 24,
+            ShadowRed = 0.1, ShadowBlue = 0.1, ShadowGreen = 0.1,
+            OutlineColor = { 0.113, 0.113, 0.113, 1 }, OutlineThickness = 1,
+            ShadowAlpha = 1.0, ShadowBlur = 0, ShadowOffsetY = 2, ShadowOffsetX = 0,
+            Justification = "Left",
+        }, LocalizationData.UIScripts.AmmoUI))
+        thread(UpdateAmmoUI)
+        FadeObstacleIn({
+            Id = ScreenAnchors.AmmoIndicatorUI,
+            Duration = CombatUI.FadeInDuration, IncludeText = true,
+            Distance = CombatUI.FadeDistance.Ammo, Direction = 0,
+        })
+    end
+
     UIHooks.SimpleHookWithVisibilityCheck("ShowAmmoUI")
     HookUtils.onPreFunction("HideAmmoUI", function() thread(SecondPlayerUi.HideAmmoUI) end)
     HookUtils.onPreFunction("DestroyAmmoUI", SecondPlayerUi.DestroyAmmoUI)

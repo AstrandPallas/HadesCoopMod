@@ -229,10 +229,19 @@ function CoopPlayerUi.LayoutForBottomSlot(slotIndex, totalSlots)
         -- to anchor against.
         lifePipBaseX = isRightmost and (barX + 340) or (barX + 242),
         lifePipY = ScreenHeight - 95,
-        ammoIndicatorX = barX - 162,
-        ammoIndicatorY = ScreenHeight - 62,
-        ammoReloadX = barX - 144,
-        ammoReloadY = ScreenHeight - 70,
+        -- Bloodstone (cast/ammo) icon + count sit on the row ABOVE the bar at
+        -- the same Y as the life-pip row, positioned to the LEFT of the
+        -- leftmost pip (~40px gap with the worst-case 5-pip cluster). This
+        -- groups the cast indicator next to the death-defiance pips above
+        -- the bar rather than alongside the bar at its mid-height.
+        --
+        -- 192 = 5 pips × 32 (max leftward growth) + 32 (gap to icon)
+        ammoIndicatorX = (isRightmost and (barX + 340) or (barX + 242)) - 192,
+        ammoIndicatorY = ScreenHeight - 95,
+        -- Reload timer keeps the same relative offset from the ammo indicator
+        -- it used to have (+18, -8), so it docks just above-right of the icon.
+        ammoReloadX = (isRightmost and (barX + 340) or (barX + 242)) - 174,
+        ammoReloadY = ScreenHeight - 103,
         ammoReloadMultiYOffset = 35,
         ammoReloadFinishTargetYOffset = 40,
         superMeterX = barX + 20,
