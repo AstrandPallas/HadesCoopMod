@@ -131,11 +131,15 @@ function CoopCamera.UpdateDynamicZoom(units)
 
     local dist = CoopCamera.GetMaxPairDistance(units)
     local desiredZoom
+    local closeZoom = (room.CoopVanillaZoomFraction or 1.0) * CoopCamera.CloseZoomScale
     if dist == nil then
-        -- Only one player alive → use the wide room default.
-        desiredZoom = room.ZoomFraction
+        -- Only one player in the camera's focus list (others dead, off-screen
+        -- during a reward menu, or not yet spawned at a boss intro). Snap to the
+        -- close vanilla-single-player zoom rather than the wide co-op zoom —
+        -- otherwise the lone visible player ends up tiny in the middle of a
+        -- camera framed for a party.
+        desiredZoom = closeZoom
     else
-        local closeZoom = (room.CoopVanillaZoomFraction or 1.0) * CoopCamera.CloseZoomScale
         local wideZoom  = room.ZoomFraction
         -- Scale the close/far thresholds with the number of alive players so a
         -- 3- or 4-player party — which sits further apart at rest than a pair —
